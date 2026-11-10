@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cortaí</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <a href="#" class="brand" data-nav="home">✂️ Cortaí</a>
+  <span class="tag">vídeos longos → cortes virais, com o Claude escolhendo</span>
+  <span id="ai-status" class="ai-status"></span>
+</header>
+
+<main id="home" class="view">
+  <section class="card new-job">
+    <h1>Novo projeto</h1>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-src="url">Link</button>
+      <button class="tab" data-src="file">Enviar arquivo</button>
+      <button class="tab" data-src="path">Arquivo no PC</button>
+    </div>
+    <form id="job-form">
+      <div class="src src-url">
+        <input name="url" type="url" placeholder="Cole o link do YouTube, Twitch VOD, TikTok…">
+      </div>
+      <div class="src src-file hidden">
+        <label class="drop" id="drop">
+          <input name="file" type="file" accept="video/*" hidden>
+          <span id="drop-label">Arraste um vídeo aqui ou clique para escolher</span>
+        </label>
+        <p id="big-hint" class="hint hidden"></p>
+      </div>
+      <div class="src src-path hidden">
+        <input name="local_path" type="text" placeholder="C:\Users\...\live.mp4 (não copia o arquivo)">
+      </div>
+
+      <label class="field wide">
+        <span>O que o Claude deve procurar? <em>(opcional)</em></span>
+        <textarea name="instructions" rows="2" placeholder="Ex.: só lances meus com reação forte; nada de treino ou menu"></textarea>
+      </label>
+
+      <div class="grid">
+        <label class="field"><span>Tipo de vídeo</span>
+          <select name="content_type"><option value="game">Live de jogo</option><option value="talk">Conversa / podcast</option></select>
+        </label>
+        <label class="field"><span>Estilo de corte</span><select name="style_id" id="style-select"></select></label>
+        <label class="field"><span>Clipes</span><input name="num_clips" type="number" min="1" max="20" value="6"></label>
+        <label class="field"><span>Duração mín. (s)</span><input name="min_len" type="number" min="5" max="170" value="15"></label>
+        <label class="field"><span>Duração máx. (s)</span><input name="max_len" type="number" min="10" max="180" value="45"></label>
+        <label class="field"><span>Enquadramento</span>
+          <select name="layout">
+            <option value="auto">Automático</option>
+            <option value="split">Tela dividida (câmera + jogo)</option>
+            <option value="face">Seguir rosto</option>
+            <option value="fit">Vídeo inteiro + fundo desfocado</option>
+          </select>
+        </label>
+        <label class="field check"><input name="visual_review" type="checkbox" checked><span>Claude assiste aos candidatos <em>(revisão visual)</em></span></label>
+      </div>
+
+      <details class="advanced">
+        <summary>Mais opções</summary>
+        <div class="grid">
+          <label class="field"><span>Analisar a partir de</span><input name="range_start" type="text" placeholder="0:00"></label>
+          <label class="field"><span>Até</span><input name="range_end" type="text" placeholder="fim do vídeo"></label>
+          <label class="field"><span>IA</span>
+            <select name="backend">
+              <option value="auto">Automático</option>
+              <option value="cli">Claude Code (assinatura)</option>
+              <option value="api">API Anthropic</option>
+              <option value="manual">Manual (colar no claude.ai)</option>
+            </select>
+          </label>
+          <label class="field"><span>Idioma</span>
+            <select name="language"><option value="">Detectar</option><option value="pt">Português</option><option value="en">Inglês</option><option value="es">Espanhol</option></select>
+          </label>
+          <label class="field"><span>Transcrição</span>
+            <select name="whisper_model">
+              <option value="large-v3-turbo">Whisper turbo (melhor)</option>
+              <option value="medium">Whisper medium</option>
+              <option value="small">Whisper small (rápido)</option>
+            </select>
+          </label>
+          <label class="field"><span>Estilo da legenda</span><select name="caption_preset" class="preset-select"></select></label>
+          <label class="field"><span>Posição da legenda</span>
+            <select name="caption_position"><option value="bottom">Embaixo</option><option value="middle">Meio</option><option value="top">Em cima</option></select>
+          </label>
+          <label class="field"><span>Cor de destaque</span><input name="caption_color" type="color" value="#FFE600"></label>
+          <label class="field check"><input name="captions" type="checkbox" checked><span>Legendas animadas</span></label>
+          <label class="field check"><input name="caption_upper" type="checkbox" checked><span>CAIXA ALTA</span></label>
+          <label class="field check"><input name="title_overlay" type="checkbox"><span>Título fixo no topo</span></label>
+        </div>
+      </details>
+      <button class="primary" type="submit" id="submit">Gerar cortes</button>
+      <p class="form-error" id="form-error"></p>
+    </form>
+  </section>
+
+  <section>
+    <h2>Projetos</h2>
+    <div id="job-list" class="job-list"></div>
+  </section>
+
+  <section>
+    <h2>Estilos de corte</h2>
+    <p class="muted">Cole links de cortes que você admira: o app assiste, e o Claude escreve um guia de como cortar igual. Use o estilo ao criar um projeto.</p>
+    <div id="style-list" class="style-list"></div>
+    <form id="style-form" class="card style-form">
+      <h3>Aprender um estilo novo</h3>
+      <label class="field"><span>Nome</span><input name="name" placeholder="Ex.: Cortes do Gaules"></label>
+      <label class="field"><span>Links dos cortes (um por linha, até 6, cada um com até 10 min)</span>
+        <textarea name="urls" rows="3" placeholder="https://www.youtube.com/shorts/..."></textarea></label>
+      <label class="field"><span>O que você gosta neles? <em>(opcional)</em></span>
+        <input name="notes" placeholder="Ex.: o timing do corte logo depois da reação"></label>
+      <button class="secondary" type="submit">Aprender estilo</button>
+      <p class="form-error" id="style-error"></p>
+    </form>
+  </section>
+</main>
+
+<main id="job" class="view hidden">
+  <div class="job-head">
+    <button class="ghost" data-nav="home">← Voltar</button>
+    <h1 id="job-title"></h1>
+    <button class="ghost danger" id="delete-job">Excluir</button>
+  </div>
+  <div id="job-status" class="status"></div>
+
+  <section id="manual" class="card hidden">
+    <h2>Modo manual</h2>
+    <ol>
+      <li><button class="secondary" id="copy-prompt">Copiar prompt</button> e cole numa conversa nova no <a href="https://claude.ai/new" target="_blank" rel="noopener">claude.ai</a>.</li>
+      <li>Cole aqui a resposta (o JSON) do Claude:</li>
+    </ol>
+    <textarea id="manual-answer" rows="6" placeholder='{"clips": [...]}'></textarea>
+    <button class="primary" id="send-manual">Renderizar clipes</button>
+    <p class="form-error" id="manual-error"></p>
+  </section>
+
+  <section id="reselect" class="card hidden">
+    <details>
+      <summary>Pedir outros cortes ao Claude</summary>
+      <textarea id="reselect-instructions" rows="2" placeholder="Ex.: agora só momentos de raiva/rage"></textarea>
+      <button class="secondary" id="reselect-btn">Pedir novos cortes</button>
+    </details>
+  </section>
+
+  <div id="clips" class="clips"></div>
+</main>
+
+<template id="clip-tpl">
+  <article class="clip">
+    <div class="player"><video controls preload="metadata" playsinline></video><div class="rendering hidden">Renderizando…</div></div>
+    <div class="clip-body">
+      <div class="clip-top"><span class="score"></span><span class="dur"></span><span class="layout"></span></div>
+      <div class="breakdown"></div>
+      <h3 class="title"></h3>
+      <p class="visual"></p>
+      <p class="hook"></p>
+      <p class="reason"></p>
+      <p class="tags"></p>
+      <div class="actions">
+        <a class="primary dl" download>Baixar</a>
+        <button class="secondary edit">Editar</button>
+        <button class="ghost copy">Copiar legenda</button>
+        <a class="ghost frames" target="_blank" rel="noopener">Frames</a>
+      </div>
+      <p class="clip-error form-error"></p>
+    </div>
+  </article>
+</template>
+
+<dialog id="editor">
+  <div class="ed-head">
+    <input id="ed-title" class="ed-title" maxlength="200">
+    <button class="ghost" id="ed-close" aria-label="Fechar">✕</button>
+  </div>
+  <div id="ed-loading" class="ed-loading">Preparando prévia…</div>
+  <div id="ed-body" class="ed-body hidden">
+    <div class="ed-left">
+      <div class="ed-stage" id="ed-stage">
+        <video id="ed-video" playsinline preload="auto"></video>
+        <div class="ed-crop hidden" id="ed-crop"></div>
+        <div class="ed-caption" id="ed-caption"></div>
+      </div>
+      <div class="ed-transport">
+        <button class="secondary" id="ed-play">▶ Tocar corte</button>
+        <button class="ghost" id="ed-set-in" title="Atalho: I">Início aqui</button>
+        <button class="ghost" id="ed-set-out" title="Atalho: O">Fim aqui</button>
+        <span id="ed-time" class="ed-time"></span>
+      </div>
+    </div>
+    <div class="ed-right">
+      <div class="ed-section">
+        <h4>Enquadramento</h4>
+        <select id="ed-layout">
+          <option value="auto">Automático</option>
+          <option value="split">Tela dividida (câmera + jogo)</option>
+          <option value="face">Seguir rosto</option>
+          <option value="manual">Posição fixa (escolher)</option>
+          <option value="fit">Vídeo inteiro + fundo desfocado</option>
+        </select>
+        <label class="ed-range hidden" id="ed-cropx-wrap">Posição do corte <input id="ed-cropx" type="range" min="0" max="1" step="0.01"></label>
+        <p class="muted small hidden" id="ed-vertical-note">Vídeo vertical: já está no formato 9:16.</p>
+      </div>
+      <div class="ed-section">
+        <h4>Legendas</h4>
+        <label class="check"><input id="ed-captions" type="checkbox"> Mostrar legendas</label>
+        <select id="ed-preset" class="preset-select"></select>
+        <div class="ed-row">
+          <select id="ed-position"><option value="bottom">Embaixo</option><option value="middle">Meio</option><option value="top">Em cima</option></select>
+          <input id="ed-color" type="color">
+          <label class="check"><input id="ed-upper" type="checkbox"> CAIXA ALTA</label>
+        </div>
+      </div>
+      <div class="ed-section">
+        <h4>Título na tela</h4>
+        <label class="check"><input id="ed-title-on" type="checkbox"> Mostrar o título fixo no topo</label>
+      </div>
+    </div>
+    <div class="ed-timeline">
+      <canvas id="ed-canvas" height="84"></canvas>
+      <div class="ed-tl-labels"><span id="ed-sel-label"></span><span class="muted small">Arraste as bordas para cortar · clique para ir ao ponto · espaço toca/pausa</span></div>
+    </div>
+    <div class="ed-words-wrap">
+      <h4>Transcrição <span class="muted small">— clique numa palavra para ir até ela, duplo clique para corrigir (vazio apaga da legenda)</span></h4>
+      <div id="ed-words" class="ed-words"></div>
+    </div>
+  </div>
+  <div class="ed-foot">
+    <p class="form-error" id="ed-error"></p>
+    <button class="ghost" id="ed-cancel">Cancelar</button>
+    <button class="primary" id="ed-save">Salvar e renderizar</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
