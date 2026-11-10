@@ -61,6 +61,19 @@ def probe(path: Path) -> dict:
     }
 
 
+def probe_any(path: Path) -> dict:
+    """Como `probe`, mas aceita arquivos só de áudio (música, narração)."""
+    proc = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)])
+    info = json.loads(proc.stdout)
+    has_video = any(s.get("codec_type") == "video" and s.get("disposition", {}).get("attached_pic") != 1
+                    for s in info["streams"])
+    if has_video:
+        return probe(path)
+    if not any(s.get("codec_type") == "audio" for s in info["streams"]):
+        raise RuntimeError("o arquivo não tem vídeo nem áudio")
+    return {"duration": float(info["format"]["duration"]), "width": 0, "height": 0, "fps": 0, "has_audio": True}
+
+
 def extract_audio(src: Path, dest: Path, duration: float = 0.0,
                   on_progress: Callable[[float], None] = lambda p: None) -> Path:
     """Extrai WAV 16 kHz mono, informando o progresso pelo `-progress` do ffmpeg."""

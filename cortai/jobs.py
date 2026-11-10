@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import frames, media, picker, render, signals, styles, transcribe
+from . import edit, frames, media, picker, render, signals, styles, transcribe
 
 ROOT = Path(__file__).resolve().parent.parent
 JOBS_DIR = Path(os.environ.get("CORTAI_JOBS_DIR") or ROOT / "jobs")
@@ -38,12 +38,38 @@ DEFAULT_OPTS = {
     "caption_color": "#FFE600",
     "caption_upper": True,
     "caption_position": "bottom",
+    "keyword_highlight": True,
+    "keyword_color": "#39E75F",
     "title_overlay": False,
+    "title_mode": "always",
+    "title_position": "top",
+    "auto_zoom": True,
+    "remove_pauses": False,
 }
 
-# o que o editor pode mudar em um clipe (sobrepõe as opções do job)
-CLIP_OVERRIDES = ("layout", "crop_x", "captions", "caption_preset", "caption_color", "caption_upper",
-                  "caption_position", "title_overlay", "title_text", "word_fixes")
+# o que o editor / "aplicar a todos" pode mudar em um clipe (sobrepõe as opções do job)
+STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color", "caption_upper",
+              "caption_position", "keyword_highlight", "keyword_color", "title_overlay", "title_mode",
+              "title_position", "auto_zoom", "remove_pauses")
+CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes")
+SETTINGS_FILE = JOBS_DIR / "_settings.json"
+
+
+def defaults() -> dict:
+    """Opções padrão de projetos novos: as de fábrica + o que o usuário salvou como padrão."""
+    try:
+        saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        saved = {}
+    return {**DEFAULT_OPTS, **{k: v for k, v in saved.items() if k in DEFAULT_OPTS}}
+
+
+def save_defaults(values: dict) -> dict:
+    current = defaults()
+    current.update({k: v for k, v in values.items() if k in STYLE_KEYS and k != "crop_x"})
+    changed = {k: v for k, v in current.items() if DEFAULT_OPTS.get(k) != v}
+    SETTINGS_FILE.write_text(json.dumps(changed, ensure_ascii=False, indent=2), encoding="utf-8")
+    return current
 
 _jobs: dict[str, dict] = {}
 _lock = threading.RLock()
@@ -136,7 +162,7 @@ def create(name: str, opts: dict, url: str | None = None, local_path: str | None
         "id": job_id, "name": name or source.get("url") or Path(source["path"]).name,
         "created": time.time(), "updated": time.time(),
         "status": "queued", "progress": 0.0, "message": "Na fila",
-        "options": {**DEFAULT_OPTS, **opts}, "backend": None,
+        "options": {**defaults(), **opts}, "backend": None,
         "source": source, "clips": [], "error": None,
     }
     with _lock:
@@ -325,6 +351,28 @@ def _set_clip(job_id: str, idx: int, **fields) -> None:
         _save(_jobs[job_id])
 
 
+def _edit_plan(job_id: str, clip: dict, opts: dict, words: list[dict]) -> tuple[list | None, list[float]]:
+    """Jump cuts (pausas mortas) e momentos de zoom de um clipe."""
+    loud_file = _dir(job_id) / "loudness.json"
+    loud = json.loads(loud_file.read_text(encoding="utf-8")) if loud_file.exists() else []
+    start, end = clip["start"], clip["end"]
+    zooms: list[float] = []
+    if opts.get("auto_zoom", True):
+        zooms = [r for r in clip.get("reactions") or [] if start <= r <= end]
+        if not zooms and loud:  # sem dica do Claude: usa o maior pico de volume do trecho
+            peaks = [e for e in signals.audio_events(loud, words)
+                     if start <= e["t"] <= end and e["kind"] in ("grito", "som_alto") and e["db"] >= 9]
+            if peaks:
+                zooms = [max(peaks, key=lambda e: e["db"])["t"]]
+    keep = None
+    if opts.get("remove_pauses") and loud:
+        protect = [(z - 0.5, z + 2.5) for z in zooms]  # nunca corta dentro da reação
+        if clip.get("peak"):
+            protect.append((clip["peak"] - 1.0, clip["peak"] + 4.0))
+        keep = edit.keep_intervals(words, loud, signals.talk_level(loud, words), start, end, protect)
+    return keep, zooms
+
+
 def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     job = get(job_id)
     clip = job["clips"][idx]
@@ -332,8 +380,11 @@ def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     out_dir = _dir(job_id) / "clips" / f"{clip['n']:02d}"
     opts = {**job["options"], **clip.get("overrides", {})}
     opts.setdefault("title_text", clip["title"])
+    opts["keywords"] = clip.get("keywords") or []
     try:
-        info = render.render_clip(Path(job["source"]["path"]), job["source"], clip, out_dir, words, opts)
+        keep, zooms = _edit_plan(job_id, clip, opts, words)
+        info = render.render_clip(Path(job["source"]["path"]), job["source"], clip, out_dir, words, opts,
+                                  keep=keep, zooms=zooms)
         _set_clip(job_id, idx, status="done", rev=clip.get("rev", 0) + 1,
                   file=f"{job_id}/clips/{clip['n']:02d}/clip.mp4",
                   thumb=f"{job_id}/clips/{clip['n']:02d}/thumb.jpg", **info)
@@ -371,6 +422,88 @@ def rerender(job_id: str, n: int, changes: dict) -> None:
         fields["title"] = str(changes["title"])[:200]
     _set_clip(job_id, idx, **fields)
     _worker.submit(_render_one, job_id, idx, _words(job_id))
+
+
+def apply_all(job_id: str, changes: dict) -> int:
+    """Aplica um "modelo" (legenda, layout, efeitos) a todos os clipes e renderiza de novo."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    style = {k: v for k, v in changes.items() if k in STYLE_KEYS}
+    if not style:
+        raise ValueError("nada para aplicar")
+    words = _words(job_id)
+    with _lock:
+        for clip in _jobs[job_id]["clips"]:
+            clip["overrides"] = {**clip.get("overrides", {}), **style}
+            clip["status"] = "pending"
+        _save(_jobs[job_id])
+    for idx in range(len(job["clips"])):
+        _worker.submit(_render_one, job_id, idx, words)
+    return len(job["clips"])
+
+
+def create_clip(job_id: str, start: float, end: float, title: str = "") -> dict:
+    """Clipe feito à mão (ex.: a partir de uma busca na transcrição)."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    dur = job["source"].get("duration") or 0
+    start, end = max(0.0, float(start)), min(dur, float(end))
+    if end - start < 1:
+        raise ValueError("o clipe precisa ter pelo menos 1 segundo")
+    words = _words(job_id)
+    text = " ".join(w["w"] for w in words if start <= w["s"] <= end)
+    n = max((c["n"] for c in job["clips"]), default=0) + 1
+    clip = {
+        "n": n, "candidate": None, "manual": True, "status": "pending", "rev": 0,
+        "title": (title or text[:60] or f"Clipe {n}").strip(), "start": round(start, 2), "end": round(end, 2),
+        "hook": "", "reason": "Clipe criado manualmente.", "visual": "", "score": 0, "scores": {},
+        "hashtags": [], "peak": None, "reactions": [], "keywords": [], "post": "",
+    }
+    with _lock:
+        _jobs[job_id]["clips"].append(clip)
+        _save(_jobs[job_id])
+    _worker.submit(_render_one, job_id, len(job["clips"]), words)
+    return clip
+
+
+def delete_clip(job_id: str, n: int) -> None:
+    with _lock:
+        job = _jobs.get(job_id)
+        if not job:
+            raise KeyError(job_id)
+        idx = _clip_index(job, n)
+        if job["clips"][idx]["status"] in ("pending", "rendering"):
+            raise ValueError("espere a renderização terminar")
+        job["clips"].pop(idx)
+        _save(job)
+    shutil.rmtree(_dir(job_id) / "clips" / f"{n:02d}", ignore_errors=True)
+
+
+def export_zip(job_id: str) -> Path:
+    """Todos os clipes prontos + legendas .srt + um arquivo com títulos e descrições para postar."""
+    import zipfile
+
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    done = [c for c in job["clips"] if c["status"] == "done"]
+    if not done:
+        raise ValueError("nenhum clipe pronto para baixar")
+    out = _dir(job_id) / "export.zip"
+    lines = []
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:  # mp4 já é comprimido
+        for c in done:
+            base = f"{c['n']:02d}-{''.join(ch for ch in c['title'] if ch.isalnum() or ch in ' -_')[:50].strip()}"
+            clip_dir = _dir(job_id) / "clips" / f"{c['n']:02d}"
+            z.write(clip_dir / "clip.mp4", f"{base}.mp4")
+            if (clip_dir / "clip.srt").exists():
+                z.write(clip_dir / "clip.srt", f"{base}.srt")
+            post = c.get("post") or f"{c['title']}\n\n{' '.join(c.get('hashtags', []))}"
+            lines.append(f"### {base}  (score {c['score']})\n{post}\n")
+        z.writestr("posts.txt", "\n".join(lines))
+    return out
 
 
 def _words(job_id: str) -> list[dict]:

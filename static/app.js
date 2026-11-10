@@ -77,8 +77,32 @@ async function loadConfig() {
     $$(".preset-select").forEach((sel) => {
       sel.innerHTML = Object.entries(cfg.caption_presets).map(([k, label]) => `<option value="${k}">${label}</option>`).join("");
     });
+    // padrões (de fábrica + os salvos pelo usuário) no formulário e no painel "estilo de todos"
+    fillFields($("#job-form"), cfg.defaults);
+    fillFields($("#apply-form"), cfg.defaults);
   } catch {}
 }
+
+function fillFields(root, values) {
+  for (const [k, v] of Object.entries(values || {})) {
+    const el = root.querySelector(`[name="${k}"]`);
+    if (!el || k === "style_id") continue;
+    if (el.type === "checkbox") el.checked = !!v;
+    else if (["range_start", "range_end"].includes(k)) el.value = v ? fmtTime(v) : "";
+    else el.value = v;
+  }
+}
+
+function readFields(root, names) {
+  const out = {};
+  for (const name of names) {
+    const el = root.querySelector(`[name="${name}"]`);
+    if (el) out[name] = el.type === "checkbox" ? el.checked : el.value;
+  }
+  return out;
+}
+const STYLE_FIELDS = ["layout", "caption_preset", "caption_position", "caption_color", "keyword_color", "title_mode",
+  "title_position", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses"];
 
 // ---------------------------------------------------------------- estilos
 async function loadStyles() {
@@ -171,9 +195,7 @@ $("#job-form").addEventListener("submit", async (e) => {
     visual_review: f.visual_review.checked, layout: f.layout.value,
     range_start: parseTime(f.range_start.value), range_end: parseTime(f.range_end.value),
     language: f.language.value, backend: f.backend.value, whisper_model: f.whisper_model.value,
-    captions: f.captions.checked, caption_upper: f.caption_upper.checked, caption_color: f.caption_color.value,
-    caption_preset: f.caption_preset.value, caption_position: f.caption_position.value,
-    title_overlay: f.title_overlay.checked,
+    ...readFields(f, STYLE_FIELDS),
   };
   const body = new FormData();
   body.append("options", JSON.stringify(options));
@@ -272,9 +294,64 @@ function renderJob(job) {
   if (job.error) $(".err", st).textContent = job.error;
 
   $("#manual").classList.toggle("hidden", job.status !== "waiting_manual");
-  $("#reselect").classList.toggle("hidden", !["done", "error"].includes(job.status) || !job.source.duration);
+  const ready = ["done", "error"].includes(job.status) && !!job.source.duration;
+  $("#job-tools").classList.toggle("hidden", !ready);
+  if (!ready) $$(".panel").forEach((p) => p.classList.add("hidden"));
+  $("#zip-btn").href = `/api/jobs/${job.id}/export.zip`;
   renderClips(job);
 }
+
+// ---- barra de ferramentas do projeto
+$$("#job-tools [data-panel]").forEach((btn) => btn.addEventListener("click", () => {
+  const panel = $(`#${btn.dataset.panel}`);
+  const open = panel.classList.contains("hidden");
+  $$(".panel").forEach((p) => p.classList.add("hidden"));
+  $$("#job-tools [data-panel]").forEach((b) => b.classList.remove("active"));
+  panel.classList.toggle("hidden", !open);
+  btn.classList.toggle("active", open);
+  if (open && btn.dataset.panel === "create-panel") $("#search-input").focus();
+}));
+
+let transcriptCache = { id: null, segments: [] };
+const fold = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+$("#search-input").addEventListener("input", async (e) => {
+  const q = fold(e.target.value.trim());
+  const box = $("#search-results");
+  if (q.length < 2) { box.replaceChildren(); return; }
+  if (transcriptCache.id !== currentJob.id) {
+    transcriptCache = { id: currentJob.id, segments: (await api(`/api/jobs/${currentJob.id}/transcript`)).segments };
+  }
+  const hits = transcriptCache.segments.filter((s) => fold(s.text).includes(q)).slice(0, 40);
+  box.replaceChildren(...hits.map((s) => {
+    const b = document.createElement("button");
+    const i = fold(s.text).indexOf(q);
+    b.innerHTML = `<time>${fmtTime(s.s)}</time><span>${escapeHtml(s.text.slice(0, i))}<mark>${escapeHtml(s.text.slice(i, i + q.length))}</mark>${escapeHtml(s.text.slice(i + q.length))}</span>`;
+    b.title = "Criar um clipe começando um pouco antes desta fala";
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const clip = await postJSON(`/api/jobs/${currentJob.id}/clips`, { start: s.s - 6, end: s.s + 22 });
+        await openJob(currentJob.id);
+        openEditor(currentJob.id, clip.n);
+      } catch (ex) { alert(ex.message); b.disabled = false; }
+    };
+    return b;
+  }));
+  if (!hits.length) box.innerHTML = `<p class="muted small">Nada encontrado.</p>`;
+});
+
+$("#apply-btn").onclick = async () => {
+  $("#apply-error").textContent = "";
+  const body = { ...readFields($("#apply-form"), STYLE_FIELDS), save_default: $("#apply-default").checked };
+  if (!confirm(`Aplicar este estilo e renderizar de novo os ${currentJob.clips.length} clipes?`)) return;
+  try {
+    await postJSON(`/api/jobs/${currentJob.id}/apply`, body);
+    if (body.save_default) loadConfig();
+    openJob(currentJob.id);
+  } catch (ex) {
+    $("#apply-error").textContent = ex.message;
+  }
+};
 
 function renderClips(job) {
   const wrap = $("#clips");
@@ -309,8 +386,12 @@ function fillClip(el, c) {
   const score = $(".score", el);
   score.textContent = c.score;
   score.className = `score ${c.score >= 75 ? "" : c.score >= 50 ? "mid" : "low"}`;
-  $(".dur", el).textContent = `${fmtTime(c.start)} → ${fmtTime(c.end)} · ${(c.end - c.start).toFixed(0)}s`;
-  $(".layout", el).textContent = c.layout ? `· ${LAYOUTS[c.layout] || c.layout}` : "";
+  $(".dur", el).textContent = `${fmtTime(c.start)} → ${fmtTime(c.end)} · ${(c.out_duration ?? c.end - c.start).toFixed(0)}s`;
+  const extras = [LAYOUTS[c.layout] || c.layout];
+  if (c.zooms_applied) extras.push(`${c.zooms_applied} zoom${c.zooms_applied > 1 ? "s" : ""}`);
+  if (c.removed > 0.2) extras.push(`−${c.removed.toFixed(1)}s de pausas`);
+  if (c.manual) extras.push("manual");
+  $(".layout", el).textContent = c.layout ? `· ${extras.filter(Boolean).join(" · ")}` : "";
   $(".breakdown", el).innerHTML = Object.entries(c.scores || {})
     .map(([k, v]) => `<span>${SCORE_NAMES[k] || k} <b>${v}</b></span>`).join("");
   $(".title", el).textContent = c.title;
@@ -318,7 +399,12 @@ function fillClip(el, c) {
   $(".visual", el).classList.toggle("hidden", !c.visual);
   $(".hook", el).textContent = c.hook ? `“${c.hook}”` : "";
   $(".reason", el).textContent = c.reason;
-  $(".tags", el).textContent = (c.hashtags || []).join(" ");
+  $(".tags", el).textContent = c.post ? "" : (c.hashtags || []).join(" ");
+  $(".post", el).textContent = c.post || "";
+  const srt = $(".srt", el);
+  srt.classList.toggle("hidden", !done);
+  srt.href = `/media/${c.file?.replace(/clip\.mp4$/, "clip.srt")}?v=${c.rev}`;
+  srt.download = `${String(c.n).padStart(2, "0")}.srt`;
   const dl = $(".dl", el);
   dl.classList.toggle("hidden", !done);
   dl.href = src;
@@ -335,9 +421,31 @@ function bindClip(el, jobId, n) {
   $(".edit", el).onclick = () => openEditor(jobId, n);
   $(".copy", el).onclick = async (e) => {
     const c = el._clip;
-    await navigator.clipboard.writeText(`${c.title}\n\n${(c.hashtags || []).join(" ")}`);
+    await navigator.clipboard.writeText(c.post || `${c.title}\n\n${(c.hashtags || []).join(" ")}`);
     e.target.textContent = "Copiado!";
-    setTimeout(() => (e.target.textContent = "Copiar legenda"), 1500);
+    setTimeout(() => (e.target.textContent = "Copiar post"), 1500);
+  };
+  $(".studio", el).onclick = async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = "Abrindo…";
+    try {
+      const p = await postJSON("/api/studio/projects", {
+        name: el._clip.title, ratio: "9:16", from_clip: { job: jobId, n },
+      });
+      location.href = `studio.html#/p/${p.id}`;
+    } catch (ex) {
+      alert(ex.message);
+      e.target.disabled = false;
+      e.target.textContent = "🎬 Estúdio";
+    }
+  };
+  $(".del", el).onclick = async () => {
+    if (!confirm(`Excluir o clipe "${el._clip.title}"?`)) return;
+    try {
+      await api(`/api/jobs/${jobId}/clips/${n}`, { method: "DELETE" });
+      el.remove();
+      openJob(jobId);
+    } catch (ex) { alert(ex.message); }
   };
 }
 
@@ -416,6 +524,14 @@ async function openEditor(jobId, n) {
   $("#ed-color").value = o.caption_color || "#FFE600";
   $("#ed-upper").checked = o.caption_upper !== false;
   $("#ed-title-on").checked = !!o.title_overlay;
+  $("#ed-title-mode").value = o.title_mode || "always";
+  $("#ed-title-pos").value = o.title_position || "top";
+  $("#ed-zoom").checked = o.auto_zoom !== false;
+  $("#ed-pauses").checked = !!o.remove_pauses;
+  $("#ed-keywords").checked = o.keyword_highlight !== false;
+  $("#ed-kwcolor").value = o.keyword_color || "#39E75F";
+  const kws = data.clip.keywords || [];
+  $("#ed-kwlist").textContent = kws.length ? `Palavras-chave do Claude: ${kws.join(", ")}` : "Sem palavras-chave para este clipe.";
   const vertical = sw / sh < 1;
   $("#ed-layout").disabled = vertical;
   $("#ed-vertical-note").classList.toggle("hidden", !vertical);
@@ -711,6 +827,9 @@ $("#ed-save").onclick = async () => {
     captions: $("#ed-captions").checked, caption_preset: $("#ed-preset").value,
     caption_position: $("#ed-position").value, caption_color: $("#ed-color").value,
     caption_upper: $("#ed-upper").checked, title_overlay: $("#ed-title-on").checked,
+    title_mode: $("#ed-title-mode").value, title_position: $("#ed-title-pos").value,
+    auto_zoom: $("#ed-zoom").checked, remove_pauses: $("#ed-pauses").checked,
+    keyword_highlight: $("#ed-keywords").checked, keyword_color: $("#ed-kwcolor").value,
     word_fixes: ed.fixes,
   };
   $("#ed-save").disabled = true;

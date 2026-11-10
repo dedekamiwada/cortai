@@ -44,6 +44,9 @@ class Clip(BaseModel):
     scores: dict[str, int] = {}
     candidate: int | None = None
     keep: bool = True
+    reactions: list[float] = []
+    keywords: list[str] = []
+    post: str = ""
 
 
 class ClipPlan(BaseModel):
@@ -74,11 +77,17 @@ REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["clips"],
     "properties": {"clips": {"type": "array", "items": {
         "type": "object", "additionalProperties": False,
-        "required": ["candidate", "keep", "visual", "scores", *_CLIP_FIELDS],
+        "required": ["candidate", "keep", "visual", "scores", "peak", "reactions", "keywords", "post", *_CLIP_FIELDS],
         "properties": {
             "candidate": {"type": "integer", "description": "Número do candidato revisado"},
             "keep": {"type": "boolean", "description": "false se a tela não sustenta o corte"},
             "visual": {"type": "string", "description": "O que se VÊ acontecendo (jogo e câmera)"},
+            "peak": {"type": "number", "description": "Segundo do acontecimento principal"},
+            "reactions": {"type": "array", "items": {"type": "number"},
+                          "description": "Segundos (vídeo original) das reações faciais mais fortes, no máximo 2"},
+            "keywords": {"type": "array", "items": {"type": "string"},
+                         "description": "1 a 4 palavras ditas no trecho que carregam a graça, para destacar na legenda"},
+            "post": {"type": "string", "description": "Descrição para postar, no idioma do vídeo, com 3 a 5 hashtags"},
             "scores": {
                 "type": "object", "additionalProperties": False,
                 "required": ["hook", "flow", "value", "trend"],
@@ -143,6 +152,10 @@ candidato justamente para isso; se precisar de mais contexto que isso, pode ir a
 4. Reescreva o título pelo que se VÊ, se o original foi chutado só pela fala.
 5. Dê notas 0 a 100 em `scores`: hook (prende nos 3 primeiros segundos), flow (ritmo, sem partes mortas), \
 value (graça/surpresa/valor), trend (potencial de compartilhamento). `score` = sua nota geral.
+6. Edição: `peak` = segundo do acontecimento; `reactions` = até 2 segundos em que a CARA do streamer reage \
+mais forte nos quadros (o vídeo dá um zoom ali — deixe vazio se não houver câmera ou reação visível); \
+`keywords` = 1 a 4 palavras realmente ditas no trecho que carregam a graça (serão destacadas na legenda); \
+`post` = descrição curta para postar, com tom de zoeira, no idioma do vídeo, terminando com 3 a 5 hashtags.
 Mantenha o número do candidato em `candidate`. Revise todos os candidatos."""
 
 
@@ -388,6 +401,10 @@ def snap_clips(clips: list[Clip], words: list[dict], duration: float, min_len: f
             "visual": clip.visual.strip(),
             "score": max(0, min(100, int(clip.score))),
             "scores": {k: max(0, min(100, int(v))) for k, v in clip.scores.items()},
+            "peak": clip.peak,
+            "reactions": [float(r) for r in clip.reactions if start <= r <= end][:2],
+            "keywords": [k.strip() for k in clip.keywords if k.strip()][:4],
+            "post": clip.post.strip(),
             "hashtags": [h if h.startswith("#") else f"#{h}" for h in (t.strip() for t in clip.hashtags) if h],
         })
     return out

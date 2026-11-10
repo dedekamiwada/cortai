@@ -42,17 +42,26 @@ def _speech_mask(n: int, words: list[dict]) -> np.ndarray:
     return mask
 
 
+def talk_level(loud: list[float], words: list[dict]) -> float:
+    """Volume típico de fala do vídeo (mediana dos trechos com palavras)."""
+    if not loud:
+        return -30.0
+    db = np.array(loud)
+    speech = _speech_mask(len(db), words)
+    return float(np.median(db[speech])) if speech.any() else float(np.median(db))
+
+
 def audio_events(loud: list[float], words: list[dict]) -> list[dict]:
     """Picos de volume e trechos sem fala, relativos ao nível normal de fala do próprio vídeo."""
     if not loud:
         return []
     db = np.array(loud)
     speech = _speech_mask(len(db), words)
-    talk_level = float(np.median(db[speech])) if speech.any() else float(np.median(db))
+    base = talk_level(loud, words)
     events: list[dict] = []
 
     # 1) picos: bem acima do nível normal de fala
-    loud_mask = db > talk_level + 7
+    loud_mask = db > base + 7
     i = 0
     while i < len(db):
         if not loud_mask[i]:
@@ -66,7 +75,7 @@ def audio_events(loud: list[float], words: list[dict]) -> list[dict]:
         events.append({
             "t": round(i * HOP, 2), "dur": round((j - i + 1) * HOP, 2),
             "kind": "grito" if with_speech else "som_alto",
-            "db": round(float(db[seg].max() - talk_level), 1),
+            "db": round(float(db[seg].max() - base), 1),
         })
         i = j + 1
 
@@ -80,9 +89,9 @@ def audio_events(loud: list[float], words: list[dict]) -> list[dict]:
         a, b = int(ends[k - 1] / HOP), int(starts[k] / HOP)
         # percentil 85: uma risada curta dentro de um intervalo longo ainda conta como "com som"
         level = float(np.percentile(db[a:b], 85)) if b > a else -90.0
-        kind = "sem_fala_com_som" if level > talk_level - 12 else "silencio"
+        kind = "sem_fala_com_som" if level > base - 12 else "silencio"
         events.append({"t": round(ends[k - 1], 2), "dur": round(gap, 2), "kind": kind,
-                       "db": round(level - talk_level, 1)})
+                       "db": round(level - base, 1)})
     events.sort(key=lambda e: e["t"])
     return events
 

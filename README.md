@@ -16,6 +16,22 @@ Clone local do OpusClip: você joga um vídeo longo (live, podcast, VOD) e receb
    - **Legendas animadas** com presets (destaque, marca-texto, uma palavra por vez, minimalista), posição e cor; **título fixo no topo** opcional.
 8. **Editor de clipe**: prévia do trecho com folga, timeline com o volume (arraste as bordas), atalhos I/O/espaço/setas, transcrição clicável, correção de palavras da legenda (duplo clique), enquadramento, legendas e título — depois "Salvar e renderizar".
 9. Também dá para pedir novos cortes ao Claude com outras instruções (reaproveita transcrição e sinais) e analisar só um trecho do vídeo.
+10. **Zoom nas reações**: o Claude marca os segundos em que a cara do streamer reage mais forte e o vídeo dá um "punch-in" ali.
+11. **Palavras-chave** destacadas na legenda em outra cor, **descrição pronta para postar** e **legenda .srt** de cada clipe.
+12. **Remover pausas mortas** (jump cuts) sem cortar silêncio com risada/som do jogo nem a reação.
+13. **Estilo de todos os clipes** de uma vez (e salvar como padrão), **clipe manual** pela busca na transcrição, **baixar todos (.zip)** com `posts.txt`.
+
+## Estúdio (editor sem IA)
+
+Em `studio.html` (link "Estúdio" no topo) fica um editor de vídeo completo que roda 100% local — as mídias são usadas direto do seu PC, nada vai para a internet:
+
+- Projetos 9:16, 16:9, 1:1, 4:5 ou 3:4; importar por caminho, arrastando ou enviando arquivos (vídeo, imagem, música).
+- Timeline com 4 faixas: **principal** (sequência magnética), **sobreposição** (picture-in-picture), **texto** e **áudio**.
+- Dividir (S), aparar pelas bordas, reordenar, duplicar, excluir, ímã, zoom da timeline, desfazer/refazer, salvamento automático.
+- Velocidade (0,25x–4x), volume/mudo, fades, enquadramento (preencher com zoom/posição, encaixar, fundo desfocado), brilho/contraste/saturação e looks prontos.
+- 18 transições (esmaecer, deslizar, cortina, círculo, zoom, pixelizar…), textos com fonte, contorno, caixa e animação (pop, zoom, subir, esmaecer) — arrastáveis direto na prévia.
+- Prévia em tempo real com proxies leves; exportação pelo ffmpeg (NVENC quando houver GPU) em 1080p ou 720p.
+- Botão **🎬 Estúdio** em cada clipe da IA abre aquele trecho no editor para finalizar à mão.
 
 ## Rodar
 

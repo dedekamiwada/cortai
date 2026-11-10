@@ -9,6 +9,7 @@
 <body>
 <header class="top">
   <a href="#" class="brand" data-nav="home">✂️ Cortaí</a>
+  <nav class="nav"><a href="index.html" class="on">Cortes com IA</a><a href="studio.html">Estúdio (editor)</a></nav>
   <span class="tag">vídeos longos → cortes virais, com o Claude escolhendo</span>
   <span id="ai-status" class="ai-status"></span>
 </header>
@@ -88,9 +89,19 @@
             <select name="caption_position"><option value="bottom">Embaixo</option><option value="middle">Meio</option><option value="top">Em cima</option></select>
           </label>
           <label class="field"><span>Cor de destaque</span><input name="caption_color" type="color" value="#FFE600"></label>
+          <label class="field"><span>Cor das palavras-chave</span><input name="keyword_color" type="color" value="#39E75F"></label>
+          <label class="field"><span>Título na tela</span>
+            <select name="title_mode"><option value="always">O clipe todo</option><option value="hook">Só nos primeiros 3 s (gancho)</option></select>
+          </label>
+          <label class="field"><span>Posição do título</span>
+            <select name="title_position"><option value="top">No topo</option><option value="upper">Mais abaixo (livre da webcam)</option></select>
+          </label>
           <label class="field check"><input name="captions" type="checkbox" checked><span>Legendas animadas</span></label>
           <label class="field check"><input name="caption_upper" type="checkbox" checked><span>CAIXA ALTA</span></label>
-          <label class="field check"><input name="title_overlay" type="checkbox"><span>Título fixo no topo</span></label>
+          <label class="field check"><input name="keyword_highlight" type="checkbox" checked><span>Destacar palavras-chave</span></label>
+          <label class="field check"><input name="title_overlay" type="checkbox"><span>Mostrar título</span></label>
+          <label class="field check"><input name="auto_zoom" type="checkbox" checked><span>Zoom nas reações</span></label>
+          <label class="field check"><input name="remove_pauses" type="checkbox"><span>Remover pausas mortas</span></label>
         </div>
       </details>
       <button class="primary" type="submit" id="submit">Gerar cortes</button>
@@ -139,12 +150,49 @@
     <p class="form-error" id="manual-error"></p>
   </section>
 
-  <section id="reselect" class="card hidden">
-    <details>
-      <summary>Pedir outros cortes ao Claude</summary>
-      <textarea id="reselect-instructions" rows="2" placeholder="Ex.: agora só momentos de raiva/rage"></textarea>
-      <button class="secondary" id="reselect-btn">Pedir novos cortes</button>
-    </details>
+  <div id="job-tools" class="job-tools hidden">
+    <button class="secondary" data-panel="create-panel">＋ Criar clipe</button>
+    <button class="secondary" data-panel="apply-panel">🎨 Estilo de todos os clipes</button>
+    <button class="secondary" data-panel="reselect">✨ Pedir outros cortes ao Claude</button>
+    <a class="secondary" id="zip-btn" href="#">⬇ Baixar todos (.zip)</a>
+  </div>
+
+  <section id="reselect" class="card panel hidden">
+    <h3>Pedir outros cortes ao Claude</h3>
+    <textarea id="reselect-instructions" rows="2" placeholder="Ex.: agora só momentos de raiva/rage"></textarea>
+    <button class="secondary" id="reselect-btn">Pedir novos cortes</button>
+  </section>
+
+  <section id="create-panel" class="card panel hidden">
+    <h3>Criar clipe a partir da transcrição</h3>
+    <input id="search-input" placeholder="Busque uma frase dita no vídeo (ex.: trave)">
+    <div id="search-results" class="search-results"></div>
+  </section>
+
+  <section id="apply-panel" class="card panel hidden">
+    <h3>Aplicar o mesmo estilo a todos os clipes</h3>
+    <div class="grid" id="apply-form">
+      <label class="field"><span>Enquadramento</span>
+        <select name="layout"><option value="auto">Automático</option><option value="split">Tela dividida</option><option value="face">Seguir rosto</option><option value="fit">Vídeo inteiro</option></select></label>
+      <label class="field"><span>Estilo da legenda</span><select name="caption_preset" class="preset-select"></select></label>
+      <label class="field"><span>Posição da legenda</span>
+        <select name="caption_position"><option value="bottom">Embaixo</option><option value="middle">Meio</option><option value="top">Em cima</option></select></label>
+      <label class="field"><span>Cor de destaque</span><input name="caption_color" type="color" value="#FFE600"></label>
+      <label class="field"><span>Cor das palavras-chave</span><input name="keyword_color" type="color" value="#39E75F"></label>
+      <label class="field"><span>Título na tela</span>
+        <select name="title_mode"><option value="always">O clipe todo</option><option value="hook">Só no começo (gancho)</option></select></label>
+      <label class="field"><span>Posição do título</span>
+        <select name="title_position"><option value="top">No topo</option><option value="upper">Mais abaixo</option></select></label>
+      <label class="field check"><input name="captions" type="checkbox" checked><span>Legendas</span></label>
+      <label class="field check"><input name="caption_upper" type="checkbox" checked><span>CAIXA ALTA</span></label>
+      <label class="field check"><input name="keyword_highlight" type="checkbox" checked><span>Palavras-chave</span></label>
+      <label class="field check"><input name="title_overlay" type="checkbox"><span>Título</span></label>
+      <label class="field check"><input name="auto_zoom" type="checkbox" checked><span>Zoom nas reações</span></label>
+      <label class="field check"><input name="remove_pauses" type="checkbox"><span>Remover pausas mortas</span></label>
+    </div>
+    <label class="check"><input id="apply-default" type="checkbox"> Usar como padrão nos próximos projetos</label>
+    <button class="primary" id="apply-btn">Aplicar e renderizar todos</button>
+    <p class="form-error" id="apply-error"></p>
   </section>
 
   <div id="clips" class="clips"></div>
@@ -161,11 +209,15 @@
       <p class="hook"></p>
       <p class="reason"></p>
       <p class="tags"></p>
+      <p class="post"></p>
       <div class="actions">
         <a class="primary dl" download>Baixar</a>
         <button class="secondary edit">Editar</button>
-        <button class="ghost copy">Copiar legenda</button>
+        <button class="ghost studio" title="Abrir este trecho no editor completo">🎬 Estúdio</button>
+        <button class="ghost copy">Copiar post</button>
+        <a class="ghost srt" download>.srt</a>
         <a class="ghost frames" target="_blank" rel="noopener">Frames</a>
+        <button class="ghost danger del" title="Excluir clipe">🗑</button>
       </div>
       <p class="clip-error form-error"></p>
     </div>
@@ -217,7 +269,21 @@
       </div>
       <div class="ed-section">
         <h4>Título na tela</h4>
-        <label class="check"><input id="ed-title-on" type="checkbox"> Mostrar o título fixo no topo</label>
+        <label class="check"><input id="ed-title-on" type="checkbox"> Mostrar o título</label>
+        <div class="ed-row">
+          <select id="ed-title-mode"><option value="always">O clipe todo</option><option value="hook">Só no começo (gancho)</option></select>
+          <select id="ed-title-pos"><option value="top">No topo</option><option value="upper">Mais abaixo</option></select>
+        </div>
+      </div>
+      <div class="ed-section">
+        <h4>Efeitos</h4>
+        <label class="check"><input id="ed-zoom" type="checkbox"> Zoom nas reações</label>
+        <label class="check"><input id="ed-pauses" type="checkbox"> Remover pausas mortas (jump cuts)</label>
+        <div class="ed-row">
+          <label class="check"><input id="ed-keywords" type="checkbox"> Destacar palavras-chave</label>
+          <input id="ed-kwcolor" type="color">
+        </div>
+        <p class="muted small" id="ed-kwlist"></p>
       </div>
     </div>
     <div class="ed-timeline">

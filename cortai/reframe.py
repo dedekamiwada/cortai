@@ -77,8 +77,12 @@ def camera_path(boxes: list[tuple[float, float, float] | None]) -> tuple[list[fl
     return path, hit
 
 
-def sendcmd_script(path: list[float], src_w: int, crop_w: int, dur: float, step: float = 0.1) -> tuple[str, int]:
-    """Gera o script do filtro `sendcmd` que move o `crop` ao longo do clipe."""
+def sendcmd_script(path: list[float], src_w: int, crop_w: int, dur: float, step: float = 0.1,
+                   to_src=lambda t: t) -> tuple[str, int]:
+    """Gera o script do filtro `sendcmd` que move o `crop` ao longo do clipe.
+
+    `dur` é a duração do vídeo final; `to_src` converte esse tempo para o tempo relativo do
+    trecho original (diferente da identidade quando há jump cuts)."""
     if not path:
         x = (src_w - crop_w) // 2
         return "", x
@@ -87,7 +91,7 @@ def sendcmd_script(path: list[float], src_w: int, crop_w: int, dur: float, step:
     first_x = None
     t = 0.0
     while t <= dur + step:
-        center = float(np.interp(t, times, path)) * src_w
+        center = float(np.interp(to_src(t), times, path)) * src_w
         x = int(min(max(center - crop_w / 2, 0), src_w - crop_w))
         if first_x is None:
             first_x = x

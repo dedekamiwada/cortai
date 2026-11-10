@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cortaí Estúdio</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="studio.css">
+</head>
+<body class="studio">
+
+<!-- lista de projetos -->
+<div id="list-view" class="hidden">
+  <header class="top">
+    <a href="index.html" class="brand">✂️ Cortaí</a>
+    <nav class="nav"><a href="index.html">Cortes com IA</a><a href="studio.html" class="on">Estúdio</a></nav>
+  </header>
+  <main class="view">
+    <section class="card st-new">
+      <h1>Novo projeto no Estúdio</h1>
+      <p class="muted">Editor de vídeo completo, sem IA e sem subir nada para a internet: as mídias são usadas direto do seu PC.</p>
+      <div class="st-new-row">
+        <input id="new-name" placeholder="Nome do projeto">
+        <div class="ratio-pick" id="ratio-pick">
+          <button data-ratio="9:16" class="on"><i style="aspect-ratio:9/16"></i>9:16</button>
+          <button data-ratio="16:9"><i style="aspect-ratio:16/9"></i>16:9</button>
+          <button data-ratio="1:1"><i style="aspect-ratio:1"></i>1:1</button>
+          <button data-ratio="4:5"><i style="aspect-ratio:4/5"></i>4:5</button>
+          <button data-ratio="3:4"><i style="aspect-ratio:3/4"></i>3:4</button>
+        </div>
+        <button class="primary" id="new-btn">Criar projeto</button>
+      </div>
+    </section>
+    <h2>Projetos</h2>
+    <div id="projects" class="projects"></div>
+  </main>
+</div>
+
+<!-- editor -->
+<div id="editor-view" class="ed hidden">
+  <header class="ed-top">
+    <a href="#" class="ghost small" id="back">← Projetos</a>
+    <input id="p-name" class="p-name" maxlength="120">
+    <span class="save-state muted small" id="save-state"></span>
+    <div class="spacer"></div>
+    <button class="ghost" id="undo" title="Desfazer (Ctrl+Z)">↶</button>
+    <button class="ghost" id="redo" title="Refazer (Ctrl+Y)">↷</button>
+    <button class="primary" id="export-btn">Exportar</button>
+  </header>
+
+  <aside class="ed-bin">
+    <div class="bin-tabs">
+      <button data-tab="media" class="on">Mídia</button>
+      <button data-tab="text">Texto</button>
+      <button data-tab="trans">Transições</button>
+    </div>
+    <div class="bin-panel" data-panel="media">
+      <label class="drop-zone" id="bin-drop">
+        <input type="file" id="bin-file" multiple accept="video/*,audio/*,image/*" hidden>
+        <span>Arraste arquivos aqui ou clique para enviar</span>
+      </label>
+      <div class="path-row">
+        <input id="bin-path" placeholder="ou cole o caminho: C:\...\video.mp4">
+        <button class="secondary" id="bin-path-btn">Usar</button>
+      </div>
+      <div id="assets" class="assets"></div>
+    </div>
+    <div class="bin-panel hidden" data-panel="text">
+      <p class="muted small">Clique para adicionar no ponto onde está o cursor da timeline.</p>
+      <div class="text-presets" id="text-presets"></div>
+    </div>
+    <div class="bin-panel hidden" data-panel="trans">
+      <p class="muted small">Selecione um vídeo na faixa principal e escolha a transição de entrada dele.</p>
+      <div class="trans-list" id="trans-list"></div>
+    </div>
+  </aside>
+
+  <section class="ed-player">
+    <div class="stage-wrap" id="stage-wrap">
+      <div class="stage" id="stage"><div class="stage-bg" id="stage-bg"></div></div>
+    </div>
+    <div class="transport">
+      <span class="tc" id="tc">0:00.0</span>
+      <button class="play" id="play" title="Tocar/pausar (espaço)">▶</button>
+      <span class="tc muted" id="tc-total">0:00.0</span>
+    </div>
+  </section>
+
+  <aside class="ed-inspector" id="inspector"></aside>
+
+  <section class="ed-timeline">
+    <div class="tl-tools">
+      <button class="ghost small" id="tl-split" title="Dividir no cursor (S)">✂ Dividir</button>
+      <button class="ghost small" id="tl-dup" title="Duplicar (Ctrl+D)">⧉ Duplicar</button>
+      <button class="ghost small" id="tl-del" title="Excluir (Delete)">🗑 Excluir</button>
+      <label class="check small"><input type="checkbox" id="tl-snap" checked> Ímã</label>
+      <div class="spacer"></div>
+      <span class="muted small">Zoom</span>
+      <input type="range" id="tl-zoom" min="8" max="400" value="60">
+    </div>
+    <div class="tl-body" id="tl-body">
+      <div class="tl-heads">
+        <div class="tl-ruler-head"></div>
+        <div class="tl-head" data-track="text">T Texto</div>
+        <div class="tl-head" data-track="overlay">⧉ Sobreposição</div>
+        <div class="tl-head main" data-track="main">🎬 Principal</div>
+        <div class="tl-head" data-track="audio">♪ Áudio</div>
+      </div>
+      <div class="tl-scroll" id="tl-scroll">
+        <div class="tl-content" id="tl-content">
+          <canvas class="tl-ruler" id="tl-ruler" height="26"></canvas>
+          <div class="tl-track" data-track="text"></div>
+          <div class="tl-track" data-track="overlay"></div>
+          <div class="tl-track main" data-track="main"></div>
+          <div class="tl-track" data-track="audio"></div>
+          <div class="tl-playhead" id="tl-playhead"><i></i></div>
+          <div class="tl-snapline hidden" id="tl-snapline"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<dialog id="export-dlg" class="export-dlg">
+  <h3>Exportar vídeo</h3>
+  <div class="grid">
+    <label class="field"><span>Resolução</span>
+      <select id="ex-res"><option value="1080">1080p (tamanho do projeto)</option><option value="720">720p</option></select></label>
+    <label class="field"><span>Qualidade</span>
+      <select id="ex-q"><option value="alta">Alta</option><option value="media">Média</option><option value="leve">Leve (arquivo menor)</option></select></label>
+  </div>
+  <div id="ex-status" class="ex-status"></div>
+  <div class="ex-actions">
+    <button class="ghost" id="ex-close">Fechar</button>
+    <a class="secondary hidden" id="ex-download" download>Baixar vídeo</a>
+    <button class="primary" id="ex-start">Exportar</button>
+  </div>
+</dialog>
+
+<script src="studio.js"></script>
+</body>
+</html>

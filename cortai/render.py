@@ -6,6 +6,10 @@ Layouts:
   split  — tela dividida: webcam em cima, jogo embaixo (vídeo horizontal com rosto)
   fit    — vídeo inteiro no meio com fundo desfocado
   auto   — face se houver rosto em ≥35% do trecho, senão fit
+
+Efeitos:
+  jump cuts  — `keep` (trechos a manter) remove pausas mortas
+  zoom       — `zooms` (segundos relativos ao clipe original) dá um "punch-in" na reação
 """
 from __future__ import annotations
 
@@ -13,9 +17,12 @@ import subprocess
 from pathlib import Path
 
 from . import captions, reframe
+from .edit import TimeMap
 
 OUT_W, OUT_H = 1080, 1920
 SPLIT_TOP = 768  # altura do painel da webcam; o jogo fica com 1152
+ZOOM = 1.32
+ZOOM_HOLD = 1.4
 _encoder: list[str] | None = None
 
 
@@ -42,21 +49,16 @@ def _run_encode(args_before_enc: list[str], args_after_enc: list[str], cwd: Path
     raise RuntimeError(f"ffmpeg falhou ao renderizar: {error}")
 
 
-def _fit_filter(subs: str) -> str:
-    return (
-        f"[0:v]split=2[a][b];"
-        f"[a]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,crop={OUT_W}:{OUT_H},"
-        f"gblur=sigma=30,eq=brightness=-0.08[bg];"
-        f"[b]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=decrease[fg];"
-        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1{subs}[v]"
-    )
-
-
-def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[dict], opts: dict) -> dict:
+def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[dict], opts: dict,
+                keep: list[tuple[float, float]] | None = None, zooms: list[float] | None = None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = float(clip["start"]), float(clip["end"])
     dur = end - start
     w, h = meta["width"], meta["height"]
+    has_audio = bool(meta.get("has_audio"))
+    tm = TimeMap(keep or [(0.0, dur)])
+    out_dur = tm.duration
+
     is_landscape = w / h > 0.6
     layout = opts.get("layout") or "auto"
     crop_x = min(1.0, max(0.0, float(opts.get("crop_x", 0.5))))
@@ -65,31 +67,58 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
 
     boxes: list = []
     face_ratio = 0.0
-    if layout in ("auto", "face", "split"):
+    if layout in ("auto", "face", "split") or zooms:
         boxes = reframe.face_positions(src, start, dur, w, h)
         face_ratio = sum(b is not None for b in boxes) / len(boxes) if boxes else 0.0
-        if layout == "auto":
-            layout = "face" if face_ratio >= 0.35 else "fit"
-        if layout == "split" and not reframe.face_box(boxes):
-            layout = "fit"  # sem rosto não há webcam para o painel de cima
+    if layout == "auto":
+        layout = "face" if face_ratio >= 0.35 else "fit"
+    if layout == "split" and not reframe.face_box(boxes):
+        layout = "fit"  # sem rosto não há webcam para o painel de cima
+    face = reframe.face_box(boxes)
 
+    # ---- legendas no tempo do vídeo final
+    inside = [x for x in captions.apply_fixes(words, opts.get("word_fixes")) if x["e"] > start and x["s"] < end]
+    mapped = [{**x, "s": tm.to_out(x["s"] - start), "e": tm.to_out(x["e"] - start)} for x in inside]
+    cap_opts = {**opts, "word_fixes": None}
     subs = ""
-    if (opts.get("captions", True) and words) or opts.get("title_overlay"):
-        (out_dir / "subs.ass").write_text(captions.build_ass(words, start, end, opts), encoding="utf-8")
+    if (opts.get("captions", True) and mapped) or opts.get("title_overlay"):
+        (out_dir / "subs.ass").write_text(captions.build_ass(mapped, 0.0, out_dur, cap_opts), encoding="utf-8")
         subs = ",subtitles=subs.ass"
+    (out_dir / "clip.srt").write_text(captions.build_srt(mapped, 0.0, out_dur, cap_opts), encoding="utf-8")
 
+    # ---- jump cuts: concatena os trechos mantidos
+    pre = ""
+    vin, ain = "0:v", "0:a:0"
+    if tm.trimmed:
+        parts = []
+        for i, (a, b) in enumerate(tm.keep):
+            parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[v{i}]")
+            if has_audio:
+                parts.append(f"[0:a:0]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}]")
+        joined = "".join(f"[v{i}]" + (f"[a{i}]" if has_audio else "") for i in range(len(tm.keep)))
+        out_labels = "[vin][ain]" if has_audio else "[vin]"
+        parts.append(f"{joined}concat=n={len(tm.keep)}:v=1:a={1 if has_audio else 0}{out_labels}")
+        pre = ";".join(parts) + ";"
+        vin, ain = "vin", "ain"
+
+    # ---- layout → [lay], e onde o rosto fica no quadro final (para mirar o zoom)
     crop_w, crop_h = _even(h * 9 / 16), _even(h)
+    face_out = (0.5, 0.5)
     if layout == "face":
         path, _ = reframe.camera_path(boxes)
-        script, x0 = reframe.sendcmd_script(path, w, crop_w, dur)
+        script, x0 = reframe.sendcmd_script(path, w, crop_w, out_dur, to_src=tm.to_src)
         (out_dir / "cmds.txt").write_text(script, encoding="utf-8")
         send = "sendcmd=f=cmds.txt," if script else ""
-        vf = f"[0:v]{send}crop={crop_w}:{crop_h}:{x0}:0,scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1{subs}[v]"
+        chain = f"[{vin}]{send}crop={crop_w}:{crop_h}:{x0}:0,scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1[lay]"
+        if face:
+            face_out = (0.5, face[1])
     elif layout == "manual":
         x0 = int(min(max(crop_x * w - crop_w / 2, 0), w - crop_w))
-        vf = f"[0:v]crop={crop_w}:{crop_h}:{x0}:0,scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1{subs}[v]"
+        chain = f"[{vin}]crop={crop_w}:{crop_h}:{x0}:0,scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1[lay]"
+        if face:
+            face_out = (min(max((face[0] * w - x0) / crop_w, 0), 1), face[1])
     elif layout == "split":
-        cx, cy, fw = reframe.face_box(boxes)
+        cx, cy, fw = face
         top_aspect = OUT_W / SPLIT_TOP
         cam_w = min(max(fw * w * 4.0, w * 0.18), w * 0.6, h * top_aspect)
         cam_h = cam_w / top_aspect
@@ -99,25 +128,60 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         game_h = OUT_H - SPLIT_TOP
         game_w = _even(min(w, h * OUT_W / game_h))
         game_x = int(min(max(crop_x * w - game_w / 2, 0), w - game_w))
-        vf = (
-            f"[0:v]split=2[c][g];"
+        chain = (
+            f"[{vin}]split=2[c][g];"
             f"[c]crop={cam_w}:{cam_h}:{cam_x}:{cam_y},scale={OUT_W}:{SPLIT_TOP}:flags=lanczos[top];"
             f"[g]crop={game_w}:{_even(h)}:{game_x}:0,scale={OUT_W}:{game_h}:flags=lanczos[bot];"
-            f"[top][bot]vstack,setsar=1{subs}[v]"
+            f"[top][bot]vstack,setsar=1[lay]"
         )
+        face_out = ((cx * w - cam_x) / cam_w, (cy * h - cam_y) / cam_h * SPLIT_TOP / OUT_H)
     else:
         layout = "fit"
-        vf = _fit_filter(subs)
+        chain = (
+            f"[{vin}]split=2[a][b];"
+            f"[a]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,crop={OUT_W}:{OUT_H},"
+            f"gblur=sigma=30,eq=brightness=-0.08[bg];"
+            f"[b]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=decrease[fg];"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[lay]"
+        )
+        if face:
+            scale = min(OUT_W / w, OUT_H / h)
+            fg_w, fg_h = w * scale, h * scale
+            face_out = (((OUT_W - fg_w) / 2 + face[0] * fg_w) / OUT_W, ((OUT_H - fg_h) / 2 + face[1] * fg_h) / OUT_H)
+
+    # ---- zoom de reação: corte seco para um quadro mais fechado no rosto
+    last = "lay"
+    zoom_windows = []
+    for z in sorted(zooms or []):
+        t = tm.to_out(z - start)
+        if 0 <= t < out_dur - 0.3 and all(abs(t - p) > ZOOM_HOLD + 1.0 for p, _ in zoom_windows):
+            zoom_windows.append((t, min(out_dur, t + ZOOM_HOLD)))
+    if zoom_windows:
+        zw, zh = _even(OUT_W / ZOOM), _even(OUT_H / ZOOM)
+        zx = int(min(max(face_out[0] * OUT_W - zw / 2, 0), OUT_W - zw))
+        zy = int(min(max(face_out[1] * OUT_H - zh * 0.4, 0), OUT_H - zh))
+        enable = "+".join(f"between(t,{a:.2f},{b:.2f})" for a, b in zoom_windows)
+        chain += (f";[lay]split=2[m][z];[z]crop={zw}:{zh}:{zx}:{zy},scale={OUT_W}:{OUT_H}:flags=lanczos[zz];"
+                  f"[m][zz]overlay=enable='{enable}'[lz]")
+        last = "lz"
+    chain += f";[{last}]null{subs}[v]"
 
     base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}",
-            "-filter_complex", vf, "-map", "[v]"]
-    audio = ["-map", "0:a:0", "-c:a", "aac", "-b:a", "160k"] if meta.get("has_audio") else []
+            "-filter_complex", pre + chain, "-map", "[v]"]
+    audio = []
+    if has_audio:
+        audio = ["-map", f"[{ain}]" if tm.trimmed else ain, "-c:a", "aac", "-b:a", "160k"]
     tail = ["-r", f"{min(meta.get('fps') or 30, 60):.3f}", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "clip.mp4"]
     _run_encode(base, audio + tail, out_dir)
 
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{min(1.0, dur / 2):.2f}", "-i", "clip.mp4",
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{min(1.0, out_dur / 2):.2f}", "-i", "clip.mp4",
                     "-frames:v", "1", "-vf", "scale=360:-2", "thumb.jpg"], cwd=out_dir, capture_output=True)
-    return {"layout": layout, "face_ratio": round(face_ratio, 2)}
+    return {
+        "layout": layout, "face_ratio": round(face_ratio, 2),
+        "out_duration": round(out_dur, 2), "removed": round(dur - out_dur, 2),
+        "zooms_applied": len(zoom_windows),
+        "srt": "clip.srt",
+    }
 
 
 def proxy(src: Path, meta: dict, start: float, end: float, out: Path) -> Path:

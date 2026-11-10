@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import captions, jobs, picker, styles
+from . import captions, jobs, picker, studio, studio_render, styles
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -42,9 +43,60 @@ def config():
         "api": picker.api_available(),
         "cli": picker.cli_status(),
         "model": picker.MODEL,
-        "defaults": jobs.DEFAULT_OPTS,
+        "defaults": jobs.defaults(),
         "caption_presets": {k: v["label"] for k, v in captions.PRESETS.items()},
     }
+
+
+@app.post("/api/settings")
+async def save_settings(request: Request):
+    return jobs.save_defaults(await request.json())
+
+
+@app.post("/api/jobs/{job_id}/apply")
+async def apply_all(job_id: str, request: Request):
+    _job_or_404(job_id)
+    body = await request.json()
+    try:
+        count = jobs.apply_all(job_id, body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if body.get("save_default"):
+        jobs.save_defaults(body)
+    return {"ok": True, "clips": count}
+
+
+@app.post("/api/jobs/{job_id}/clips")
+async def create_clip(job_id: str, request: Request):
+    _job_or_404(job_id)
+    body = await request.json()
+    try:
+        return jobs.create_clip(job_id, body.get("start", 0), body.get("end", 0), body.get("title", ""))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/jobs/{job_id}/clips/{n}")
+def delete_clip(job_id: str, n: int):
+    _job_or_404(job_id)
+    try:
+        jobs.delete_clip(job_id, n)
+    except KeyError:
+        raise HTTPException(404, "clipe não encontrado")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.get("/api/jobs/{job_id}/export.zip")
+def export_zip(job_id: str):
+    job = _job_or_404(job_id)
+    try:
+        path = jobs.export_zip(job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    name = "".join(ch for ch in Path(job["name"]).stem if ch.isalnum() or ch in " -_")[:40] or "cortes"
+    return FileResponse(path, media_type="application/zip", filename=f"{name}-cortes.zip")
 
 
 @app.get("/api/styles")
@@ -217,6 +269,127 @@ def source_video(job_id: str):
     if not path or not Path(path).is_file():
         raise HTTPException(404, "vídeo original indisponível")
     return FileResponse(path)
+
+
+# ------------------------------------------------------------------ Estúdio (editor sem IA)
+
+studio.init(jobs.JOBS_DIR)
+
+
+def _project_or_404(pid: str) -> dict:
+    try:
+        return studio.load(pid)
+    except (KeyError, FileNotFoundError):
+        raise HTTPException(404, "projeto não encontrado")
+
+
+@app.get("/api/studio/projects")
+def studio_projects():
+    return studio.list_projects()
+
+
+@app.post("/api/studio/projects")
+async def studio_create(request: Request):
+    body = await request.json()
+    p = studio.create(str(body.get("name", "")), str(body.get("ratio", "9:16")))
+    for path in body.get("paths") or []:
+        try:
+            studio.add_asset(p["id"], path)
+        except FileNotFoundError:
+            pass
+    if body.get("from_clip"):  # abrir um clipe do Cortaí no editor
+        fc = body["from_clip"]
+        job = jobs.get(fc.get("job", ""))
+        if job:
+            clip = next((c for c in job["clips"] if c["n"] == fc.get("n")), None)
+            if clip:
+                # recorta só o trecho do clipe (+10 s de folga de cada lado) em vez de usar a live inteira
+                margin = 10.0
+                seg_start = max(0.0, clip["start"] - margin)
+                seg_end = min(job["source"]["duration"], clip["end"] + margin)
+                seg = studio._pdir(p["id"]) / "uploads" / f"clipe-{clip['n']:02d}.mp4"
+                seg.parent.mkdir(exist_ok=True)
+                await run_in_threadpool(_cut_segment, job["source"]["path"], seg_start, seg_end, seg)
+                asset = studio.add_asset(p["id"], seg)
+                studio.mutate(p["id"], lambda pr: pr["tracks"]["main"].append({
+                    "id": "i" + asset["id"], "asset": asset["id"], "in": round(clip["start"] - seg_start, 3),
+                    "out": round(clip["end"] - seg_start, 3), "speed": 1, "volume": 1, "fit": "fill"}))
+    return studio.load(p["id"])
+
+
+def _cut_segment(src: str, start: float, end: float, out: Path) -> None:
+    base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", src, "-t", f"{end - start:.3f}",
+            "-map", "0:v:0", "-map", "0:a:0?"]
+    for enc in (["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "17"], ["-c:v", "libx264", "-preset", "fast", "-crf", "17"]):
+        if subprocess.run(base + enc + ["-c:a", "aac", "-b:a", "192k", str(out)], capture_output=True).returncode == 0:
+            return
+    raise HTTPException(500, "não consegui recortar o trecho do clipe")
+
+
+@app.get("/api/studio/projects/{pid}")
+def studio_get(pid: str):
+    return _project_or_404(pid)
+
+
+@app.put("/api/studio/projects/{pid}")
+async def studio_save(pid: str, request: Request):
+    _project_or_404(pid)
+    return studio.save(pid, await request.json())
+
+
+@app.delete("/api/studio/projects/{pid}")
+def studio_delete(pid: str):
+    _project_or_404(pid)
+    studio.delete(pid)
+    return {"ok": True}
+
+
+@app.post("/api/studio/projects/{pid}/assets")
+async def studio_add_asset(pid: str, request: Request):
+    _project_or_404(pid)
+    body = await request.json()
+    path = body.get("path")
+    if body.get("upload_id"):
+        path = UPLOADS / Path(body["upload_id"]).name
+        if not path.is_file():
+            raise HTTPException(400, "upload não encontrado")
+        dest = studio._pdir(pid) / "uploads"
+        dest.mkdir(exist_ok=True)
+        target = dest / (Path(str(body.get("name") or path.name)).name or path.name)
+        path.replace(target)
+        path = target
+    try:
+        return studio.add_asset(pid, path)
+    except FileNotFoundError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/studio/projects/{pid}/assets/{aid}")
+def studio_delete_asset(pid: str, aid: str):
+    def drop(p):
+        if any(it.get("asset") == aid for tr in p["tracks"].values() for it in tr):
+            raise ValueError("a mídia está em uso na timeline")
+        p["assets"].pop(aid, None)
+    _project_or_404(pid)
+    try:
+        studio.mutate(pid, drop)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.post("/api/studio/projects/{pid}/export")
+async def studio_export(pid: str, request: Request):
+    p = _project_or_404(pid)
+    if (p.get("export") or {}).get("status") == "running":
+        raise HTTPException(400, "já existe uma exportação em andamento")
+    if any(a.get("status") != "ready" for a in p["assets"].values()
+           if any(it.get("asset") == a["id"] for tr in p["tracks"].values() for it in tr)):
+        raise HTTPException(400, "espere as mídias da timeline terminarem de carregar")
+    body = await request.json()
+    studio.mutate(pid, lambda pr: pr.__setitem__("export", {"status": "running", "progress": 0.0}))
+    studio._worker.submit(studio_render.export, pid, body)
+    return {"ok": True}
 
 
 app.mount("/media", StaticFiles(directory=jobs.JOBS_DIR), name="media")

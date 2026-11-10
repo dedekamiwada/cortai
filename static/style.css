@@ -24,6 +24,9 @@ a { color: var(--accent); }
   position: sticky; top: 0; z-index: 5;
 }
 .brand { font-weight: 800; font-size: 20px; color: var(--text); text-decoration: none; }
+.nav { display: flex; gap: 14px; }
+.nav a { color: var(--muted); text-decoration: none; font-size: 14px; }
+.nav a.on, .nav a:hover { color: var(--text); }
 .tag { color: var(--muted); font-size: 13px; }
 .ai-status { margin-left: auto; font-size: 12px; color: var(--muted); }
 .ai-status b { color: var(--accent); }
@@ -122,6 +125,18 @@ h4 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; te
 .breakdown b { color: var(--text); }
 .visual { margin: 0; font-size: 13px; color: #cfe9a0; }
 .visual::before { content: "👁 "; }
+
+.job-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.job-tools .active { border-color: var(--accent); color: var(--accent); }
+.panel { margin-bottom: 18px; display: flex; flex-direction: column; gap: 10px; }
+.panel .primary, .panel .secondary { align-self: flex-start; }
+.search-results { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow: auto; }
+.search-results button { text-align: left; justify-content: flex-start; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.search-results button:hover { border-color: var(--accent); }
+.search-results time { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 8px; flex: none; }
+.search-results mark { background: var(--accent); color: var(--accent-ink); border-radius: 3px; }
+.post { margin: 4px 0 0; font-size: 13px; background: var(--panel-2); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }
+.post:empty { display: none; }
 
 /* estilos */
 .style-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-bottom: 14px; }
