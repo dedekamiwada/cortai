@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cortaí · Pós-edição</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <a href="#" class="brand" data-nav="home">✂️ Cortaí</a>
+  <nav class="nav"><a href="index.html">Cortes com IA</a><a href="studio.html">Estúdio (editor)</a><a href="pos.html" class="on">✨ Pós-edição</a></nav>
+  <span class="tag">clipe pronto → zooms, efeitos, trilha e voz destacada</span>
+</header>
+
+<main id="home" class="view">
+  <section class="card">
+    <h1>Pós-edição de um vídeo pronto</h1>
+    <p class="muted small">O Claude assiste ao clipe e marca onde entram zoom, tremor, texto, emote, efeito sonoro e trilha. Você revisa a tabela e renderiza. Sai uma versão com trilha e outra sem (para pôr a música do TikTok).</p>
+    <form id="pos-form">
+      <label class="field wide"><span>Vídeo no PC</span>
+        <input name="local_path" type="text" placeholder="C:\Users\...\corte.mp4" required>
+      </label>
+      <label class="field wide"><span>Pedido para o Claude <em>(opcional)</em></span>
+        <textarea name="instructions" rows="2" placeholder="Ex.: exagera nos zooms; sem emote; o momento é a queda na lava"></textarea>
+      </label>
+      <button class="primary" type="submit">✨ Analisar</button>
+      <p class="form-error" id="form-error"></p>
+    </form>
+  </section>
+
+  <section class="card lib">
+    <h2>Biblioteca de sons, músicas e emotes</h2>
+    <p class="muted small">Coloque aqui só arquivos que você tem direito de usar. Música por clima em <code>musicas/tensao</code>, <code>triste</code>, <code>epico</code>, <code>comico</code>. Sem música de tensão ou triste, o Cortaí gera uma trilha original.</p>
+    <div class="lib-row">
+      <input id="lib-dir" type="text">
+      <button class="secondary" id="lib-save">Usar esta pasta</button>
+      <button class="ghost" id="lib-open">📂 Abrir pasta</button>
+    </div>
+    <p class="muted small" id="lib-summary"></p>
+  </section>
+
+  <h2>Pós-edições</h2>
+  <div id="pos-list" class="job-list"></div>
+</main>
+
+<main id="proj" class="view hidden">
+  <div class="job-head">
+    <button class="ghost" data-nav="home">← Voltar</button>
+    <h1 id="proj-title"></h1>
+    <button class="ghost danger" id="proj-delete">Excluir</button>
+  </div>
+  <div id="proj-status" class="status"></div>
+
+  <div class="pos-layout">
+    <div class="pos-player">
+      <video id="src-video" controls playsinline preload="metadata"></video>
+      <p class="muted small">Original · clique num tempo da tabela para ir até ele</p>
+    </div>
+    <div class="pos-plan hidden" id="plan">
+      <p class="historia" id="historia"></p>
+      <table class="beats">
+        <thead><tr><th></th><th>tempo</th><th>o que acontece</th><th>edição</th></tr></thead>
+        <tbody id="beats"></tbody>
+      </table>
+      <h4>Trilha <span class="muted small">— abaixa sozinha quando você fala</span></h4>
+      <table class="beats">
+        <tbody id="trilha"></tbody>
+      </table>
+      <p class="muted small" id="fim-note"></p>
+      <div class="pos-actions">
+        <button class="primary" id="render-btn">Renderizar</button>
+        <input id="replan-text" type="text" placeholder="Pedir outro plano: ex. menos efeitos, mais tensão no começo">
+        <button class="secondary" id="replan-btn">Pedir outro plano</button>
+      </div>
+      <p class="form-error" id="plan-error"></p>
+    </div>
+  </div>
+
+  <section class="pos-results hidden" id="results">
+    <h2>Resultado</h2>
+    <div class="pos-outs" id="outs"></div>
+  </section>
+</main>
+
+<template id="out-tpl">
+  <article class="pos-out">
+    <video controls playsinline preload="metadata"></video>
+    <div class="out-meta"><b class="out-name"></b><span class="muted small out-stats"></span></div>
+    <a class="primary dl" download>Baixar</a>
+  </article>
+</template>
+
+<script src="pos.js"></script>
+</body>
+</html>

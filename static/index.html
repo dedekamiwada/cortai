@@ -9,7 +9,7 @@
 <body>
 <header class="top">
   <a href="#" class="brand" data-nav="home">✂️ Cortaí</a>
-  <nav class="nav"><a href="index.html" class="on">Cortes com IA</a><a href="studio.html">Estúdio (editor)</a></nav>
+  <nav class="nav"><a href="index.html" class="on">Cortes com IA</a><a href="studio.html">Estúdio (editor)</a><a href="pos.html">✨ Pós-edição</a></nav>
   <span class="tag">vídeos longos → cortes virais, com o Claude escolhendo</span>
   <span id="ai-status" class="ai-status"></span>
 </header>
@@ -104,6 +104,7 @@
           <label class="field check"><input name="auto_zoom" type="checkbox" checked><span>Zoom nas reações</span></label>
           <label class="field check"><input name="remove_pauses" type="checkbox"><span>Remover pausas mortas</span></label>
           <label class="field check"><input name="normalize_audio" type="checkbox" checked><span>Volume padrão das redes (-14 LUFS)</span></label>
+          <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada (EQ + compressor)</span></label>
         </div>
       </details>
       <button class="primary" type="submit" id="submit">Gerar cortes</button>
@@ -193,6 +194,7 @@
       <label class="field check"><input name="auto_zoom" type="checkbox" checked><span>Zoom nas reações</span></label>
       <label class="field check"><input name="remove_pauses" type="checkbox"><span>Remover pausas mortas</span></label>
           <label class="field check"><input name="normalize_audio" type="checkbox" checked><span>Volume padrão das redes (-14 LUFS)</span></label>
+          <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada (EQ + compressor)</span></label>
     </div>
     <label class="check"><input id="apply-default" type="checkbox"> Usar como padrão nos próximos projetos</label>
     <button class="primary" id="apply-btn">Aplicar e renderizar todos</button>
@@ -218,6 +220,7 @@
         <a class="primary dl" download>Baixar</a>
         <button class="secondary edit">Editar</button>
         <button class="ghost studio" title="Abrir este trecho no editor completo">🎬 Estúdio</button>
+        <button class="ghost posedit" title="Zooms, efeitos sonoros, trilha e voz destacada neste clipe pronto">✨ Pós-edição</button>
         <button class="ghost copy">Copiar post</button>
         <a class="ghost srt" download>.srt</a>
         <a class="ghost frames" target="_blank" rel="noopener">Frames</a>

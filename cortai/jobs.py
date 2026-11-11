@@ -46,12 +46,14 @@ DEFAULT_OPTS = {
     "auto_zoom": True,
     "remove_pauses": False,
     "normalize_audio": True,
+    "voice_enhance": True,
 }
 
 # o que o editor / "aplicar a todos" pode mudar em um clipe (sobrepõe as opções do job)
 STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color", "caption_upper",
               "caption_position", "keyword_highlight", "keyword_color", "title_overlay", "title_mode",
-              "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio")
+              "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio",
+              "voice_enhance")
 CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds")
 SETTINGS_FILE = JOBS_DIR / "_settings.json"
 
@@ -131,7 +133,8 @@ def busy() -> bool:
             or any(c.get("status") in ("pending", "rendering") for c in j["clips"])
             for j in _jobs.values()
         )
-    return working or any(st.get("status") == "learning" for st in styles.list_styles(JOBS_DIR))
+    from . import posedit  # importado aqui: posedit importa jobs
+    return working or posedit.busy() or any(st.get("status") == "learning" for st in styles.list_styles(JOBS_DIR))
 
 
 def get(job_id: str) -> dict | None:

@@ -25,6 +25,11 @@ SPLIT_TOP = 768  # altura do painel da webcam; o jogo fica com 1152
 ZOOM = 1.32
 ZOOM_HOLD = 1.4
 LOUDNESS, TRUE_PEAK = -14, -2.0  # TikTok/Reels/Shorts; pico com folga porque o AAC sobe os picos ~1 dB
+# Voz destacada: tira o grave abafado (250 Hz), realça a presença (3,2 kHz) e o ar, comprime e segura o
+# pico do grito. Testado num corte de live: a faixa dinâmica caiu de 8 para ~5 LU sem estourar.
+VOICE_CHAIN = ("highpass=f=85,equalizer=f=250:t=q:w=1.2:g=-3,equalizer=f=3200:t=q:w=1.0:g=4,"
+               "highshelf=f=9000:g=2,acompressor=threshold=-22dB:ratio=4:attack=4:release=150:makeup=6dB:knee=4,"
+               "alimiter=limit=0.84:attack=2:release=60:level=disabled")
 _encoder: list[str] | None = None
 
 
@@ -51,19 +56,25 @@ def _run_encode(args_before_enc: list[str], args_after_enc: list[str], cwd: Path
     raise RuntimeError(f"ffmpeg falhou ao renderizar: {error}")
 
 
-def _audio_parts(tm: TimeMap) -> tuple[str, str]:
-    """Grafo de áudio dos trechos mantidos (jump cuts). Devolve (filtros, rótulo de saída)."""
-    if not tm.trimmed:
+def _audio_parts(tm: TimeMap, voice: bool = False) -> tuple[str, str]:
+    """Grafo de áudio dos trechos mantidos (jump cuts) e da voz destacada. Devolve (filtros, rótulo de saída)."""
+    if not tm.trimmed and not voice:
         return "", "0:a:0"
-    parts = [f"[0:a:0]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}]" for i, (a, b) in enumerate(tm.keep)]
-    parts.append("".join(f"[a{i}]" for i in range(len(tm.keep))) + f"concat=n={len(tm.keep)}:v=0:a=1[ain]")
-    return ";".join(parts) + ";", "ain"
+    parts, label = [], "0:a:0"
+    if tm.trimmed:
+        parts = [f"[0:a:0]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}]" for i, (a, b) in enumerate(tm.keep)]
+        parts.append("".join(f"[a{i}]" for i in range(len(tm.keep))) + f"concat=n={len(tm.keep)}:v=0:a=1[ain]")
+        label = "ain"
+    if voice:
+        parts.append(f"[{label}]{VOICE_CHAIN}[avoz]")
+        label = "avoz"
+    return ";".join(parts) + ";", label
 
 
-def _loudnorm(src: Path, start: float, dur: float, tm: TimeMap) -> str | None:
-    """1ª passada do loudnorm: mede o áudio exatamente como vai sair (com os cortes). Devolve o
-    filtro da 2ª passada, linear (sem "bombear" o volume), ou None para clipe sem som."""
-    pre, label = _audio_parts(tm)
+def _loudnorm(src: Path, start: float, dur: float, tm: TimeMap, voice: bool = False) -> str | None:
+    """1ª passada do loudnorm: mede o áudio exatamente como vai sair (com os cortes e a voz tratada).
+    Devolve o filtro da 2ª passada, linear (sem "bombear" o volume), ou None para clipe sem som."""
+    pre, label = _audio_parts(tm, voice)
     graph = pre + f"[{label}]loudnorm=I={LOUDNESS}:TP={TRUE_PEAK}:LRA=11:print_format=json[m]"
     proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}",
                            "-filter_complex", graph, "-map", "[m]", "-f", "null", "-"],
@@ -129,8 +140,9 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         vin = "vin"
 
     # ---- áudio: mesmos cortes e, se ligado, volume padrão das redes (-14 LUFS, pico -1 dB)
-    audio_pre, ain = _audio_parts(tm) if has_audio else ("", "")
-    level = _loudnorm(src, start, dur, tm) if has_audio and opts.get("normalize_audio", True) else None
+    voice = bool(opts.get("voice_enhance", True))
+    audio_pre, ain = _audio_parts(tm, voice) if has_audio else ("", "")
+    level = _loudnorm(src, start, dur, tm, voice) if has_audio and opts.get("normalize_audio", True) else None
     if level:
         audio_pre += f"[{ain}]{level}[aout];"
         ain = "aout"
@@ -216,6 +228,7 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         "out_duration": round(out_dur, 2), "removed": round(dur - out_dur, 2),
         "zooms_applied": len(zoom_windows),
         "audio_normalized": bool(level),
+        "voice_enhanced": has_audio and voice,
         "srt": "clip.srt",
     }
 

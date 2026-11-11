@@ -102,7 +102,7 @@ function readFields(root, names) {
   return out;
 }
 const STYLE_FIELDS = ["layout", "caption_preset", "caption_position", "caption_color", "keyword_color", "title_mode",
-  "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio"];
+  "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio", "voice_enhance"];
 
 // ---------------------------------------------------------------- estilos
 async function loadStyles() {
@@ -413,6 +413,7 @@ function fillClip(el, c) {
   frames.classList.toggle("hidden", !c.review_image);
   if (c.review_image) frames.href = `/media/${c.review_image}`;
   $(".edit", el).disabled = !(done || c.status === "error");
+  $(".posedit", el).disabled = !done;
   $(".clip-error", el).textContent = c.error || "";
   el._clip = c;
 }
@@ -437,6 +438,16 @@ function bindClip(el, jobId, n) {
       alert(ex.message);
       e.target.disabled = false;
       e.target.textContent = "🎬 Estúdio";
+    }
+  };
+  $(".posedit", el).onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      const p = await postJSON("/api/pos", { job: jobId, n });
+      location.href = `pos.html#/p/${p.id}`;
+    } catch (ex) {
+      alert(ex.message);
+      e.target.disabled = false;
     }
   };
   $(".del", el).onclick = async () => {

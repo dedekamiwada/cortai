@@ -11,10 +11,11 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import captions, jobs, paths, picker, studio, studio_render, styles
+from . import captions, jobs, paths, picker, posedit, studio, studio_render, styles
 
 app = FastAPI(title="Cortaí")
 jobs.load_existing()
+posedit.load_existing()
 
 
 def _opts(raw: str) -> dict:
@@ -267,6 +268,96 @@ def source_video(job_id: str):
     if not path or not Path(path).is_file():
         raise HTTPException(404, "vídeo original indisponível")
     return FileResponse(path)
+
+
+# ------------------------------------------------------------------ Pós-edição (drama num clipe pronto)
+
+def _pos_or_404(pid: str) -> dict:
+    p = posedit.get(pid)
+    if not p:
+        raise HTTPException(404, "pós-edição não encontrada")
+    return p
+
+
+@app.get("/api/pos")
+def pos_list():
+    return [{k: p.get(k) for k in ("id", "name", "created", "status", "message", "progress", "result", "rev")}
+            for p in posedit.list_all()]
+
+
+@app.post("/api/pos")
+async def pos_create(request: Request):
+    body = await request.json()
+    try:
+        p = posedit.create(local_path=body.get("local_path") or "", job_id=body.get("job") or "",
+                           n=body.get("n"), instructions=body.get("instructions") or "")
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"id": p["id"]}
+
+
+@app.get("/api/pos/biblioteca")
+def pos_library():
+    return posedit.library()
+
+
+@app.post("/api/pos/biblioteca")
+async def pos_set_library(request: Request):
+    try:
+        return posedit.set_library_dir((await request.json()).get("dir") or "")
+    except FileNotFoundError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/pos/biblioteca/abrir")
+def pos_open_library():
+    posedit.open_library_folder()
+    return {"ok": True}
+
+
+@app.get("/api/pos/{pid}")
+def pos_get(pid: str):
+    return _pos_or_404(pid)
+
+
+@app.delete("/api/pos/{pid}")
+def pos_delete(pid: str):
+    _pos_or_404(pid)
+    try:
+        posedit.delete(pid)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.get("/api/pos/{pid}/source")
+def pos_source(pid: str):
+    path = Path(_pos_or_404(pid)["source"]["path"])
+    if not path.is_file():
+        raise HTTPException(404, "vídeo original indisponível")
+    return FileResponse(path)
+
+
+@app.post("/api/pos/{pid}/render")
+async def pos_render(pid: str, request: Request):
+    _pos_or_404(pid)
+    body = await request.json()
+    try:
+        posedit.start_render(pid, [int(i) for i in body.get("off") or []],
+                             [int(i) for i in body.get("off_trilha") or []], body.get("textos") or {})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.post("/api/pos/{pid}/replan")
+async def pos_replan(pid: str, request: Request):
+    _pos_or_404(pid)
+    try:
+        posedit.replan(pid, (await request.json()).get("instructions") or "")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ Estúdio (editor sem IA)

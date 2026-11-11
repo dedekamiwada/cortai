@@ -27,6 +27,18 @@ As regras de título ficam em `cortai/titles.py` (vêm da skill `titulos-virais-
 
 Aprendizado: cada título vai para `jobs/_titulos/titulos.csv` (abre no Excel). Depois de postar, preencha a coluna `views` (aceita `12000`, `12.000`, `12k`, `1,2 mil`). Quando houver pelo menos 2 fórmulas com 3 posts medidos ou mais, o prompt passa a dizer ao Claude quais fórmulas rendem mais no seu canal. Feche o CSV no Excel antes de rodar um job, senão a gravação daquele job é pulada.
 
+## Pós-edição (drama num clipe pronto)
+
+Em `pos.html` (link "✨ Pós-edição" no topo, ou o botão **✨ Pós-edição** em cada clipe) você abre um vídeo já cortado — do Cortaí ou de fora, mesmo com legenda e título gravados — e o Claude planeja a pós-edição:
+
+- Ele lê a fala (tempo de cada palavra), os picos e silêncios e folhas de frames (1 por segundo), e devolve **beats**: zoom punch no rosto, zoom lento no silêncio dramático, tremor, **flash de texto** (só texto, no máximo 1), **selo** (1–2 palavras, tipo "LAVA"), emote, efeito sonoro e as partes da **trilha** (tensão, corte seco, triste, épico, cômico).
+- Você revisa a tabela (tempo · o que acontece · edição), desliga o que não quiser, corrige os textos e renderiza. Efeito sonoro que cairia por cima da fala já vem desligado.
+- O render é só ffmpeg: voz destacada, SFX a -6 dB, trilha que abaixa sozinha quando você fala (ducking) e volume final a -14 LUFS. Saem **duas versões: com trilha e sem trilha** (para pôr a música do TikTok pela biblioteca licenciada do app).
+
+**Biblioteca** (`jobs/_biblioteca/` ou `Vídeos\Cortai\_biblioteca`, ou a pasta que você escolher na tela): `sfx/`, `emotes/` e `musicas/<clima>/`. Coloque ali só arquivos que você tem direito de usar; o Claude só escolhe o que existe. Na primeira vez o Cortaí cria um kit de SFX original (`cortai-*.wav`). Sem música de **tensão** ou **triste**, ele gera uma trilha original; épico e cômico ficam mudos sem arquivo.
+
+A opção **Voz destacada** (EQ que tira o grave abafado e realça a presença, compressor e limitador) também vale para os cortes normais e vem ligada por padrão.
+
 ## Estúdio (editor sem IA)
 
 Em `studio.html` (link "Estúdio" no topo) fica um editor de vídeo completo que roda 100% local — as mídias são usadas direto do seu PC, nada vai para a internet:
