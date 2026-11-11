@@ -13,10 +13,9 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import edit, frames, media, picker, render, signals, styles, transcribe
+from . import edit, frames, media, paths, picker, render, signals, styles, transcribe
 
-ROOT = Path(__file__).resolve().parent.parent
-JOBS_DIR = Path(os.environ.get("CORTAI_JOBS_DIR") or ROOT / "jobs")
+JOBS_DIR = paths.JOBS_DIR
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_OPTS = {
@@ -43,14 +42,16 @@ DEFAULT_OPTS = {
     "title_overlay": False,
     "title_mode": "always",
     "title_position": "top",
+    "title_style": "impacto",
     "auto_zoom": True,
     "remove_pauses": False,
+    "normalize_audio": True,
 }
 
 # o que o editor / "aplicar a todos" pode mudar em um clipe (sobrepõe as opções do job)
 STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color", "caption_upper",
               "caption_position", "keyword_highlight", "keyword_color", "title_overlay", "title_mode",
-              "title_position", "auto_zoom", "remove_pauses")
+              "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio")
 CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes")
 SETTINGS_FILE = JOBS_DIR / "_settings.json"
 
@@ -120,6 +121,17 @@ def load_existing() -> None:
 def list_jobs() -> list[dict]:
     with _lock:
         return sorted((dict(j) for j in _jobs.values()), key=lambda j: j["created"], reverse=True)
+
+
+def busy() -> bool:
+    """Há job, render de clipe ou aprendizado de estilo em andamento (fechar o app os interromperia)."""
+    with _lock:
+        working = any(
+            j["status"] not in ("done", "error", "waiting_manual")
+            or any(c.get("status") in ("pending", "rendering") for c in j["clips"])
+            for j in _jobs.values()
+        )
+    return working or any(st.get("status") == "learning" for st in styles.list_styles(JOBS_DIR))
 
 
 def get(job_id: str) -> dict | None:

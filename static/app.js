@@ -102,7 +102,7 @@ function readFields(root, names) {
   return out;
 }
 const STYLE_FIELDS = ["layout", "caption_preset", "caption_position", "caption_color", "keyword_color", "title_mode",
-  "title_position", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses"];
+  "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio"];
 
 // ---------------------------------------------------------------- estilos
 async function loadStyles() {
@@ -526,6 +526,7 @@ async function openEditor(jobId, n) {
   $("#ed-title-on").checked = !!o.title_overlay;
   $("#ed-title-mode").value = o.title_mode || "always";
   $("#ed-title-pos").value = o.title_position || "top";
+  $("#ed-title-style").value = o.title_style || "impacto";
   $("#ed-zoom").checked = o.auto_zoom !== false;
   $("#ed-pauses").checked = !!o.remove_pauses;
   $("#ed-keywords").checked = o.keyword_highlight !== false;
@@ -827,7 +828,7 @@ $("#ed-save").onclick = async () => {
     captions: $("#ed-captions").checked, caption_preset: $("#ed-preset").value,
     caption_position: $("#ed-position").value, caption_color: $("#ed-color").value,
     caption_upper: $("#ed-upper").checked, title_overlay: $("#ed-title-on").checked,
-    title_mode: $("#ed-title-mode").value, title_position: $("#ed-title-pos").value,
+    title_mode: $("#ed-title-mode").value, title_position: $("#ed-title-pos").value, title_style: $("#ed-title-style").value,
     auto_zoom: $("#ed-zoom").checked, remove_pauses: $("#ed-pauses").checked,
     keyword_highlight: $("#ed-keywords").checked, keyword_color: $("#ed-kwcolor").value,
     word_fixes: ed.fixes,

@@ -2,7 +2,8 @@ fastapi>=0.115
 uvicorn>=0.30
 python-multipart>=0.0.9
 faster-whisper>=1.1
-opencv-python>=4.9
+opencv-python>=4.9,<5
 numpy
 anthropic>=0.100
 yt-dlp
+pywebview>=6.2

@@ -11,9 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import captions, jobs, picker, studio, studio_render, styles
-
-STATIC = Path(__file__).resolve().parent.parent / "static"
+from . import captions, jobs, paths, picker, studio, studio_render, styles
 
 app = FastAPI(title="Cortaí")
 jobs.load_existing()
@@ -393,4 +391,4 @@ async def studio_export(pid: str, request: Request):
 
 
 app.mount("/media", StaticFiles(directory=jobs.JOBS_DIR), name="media")
-app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+app.mount("/", StaticFiles(directory=paths.STATIC, html=True), name="static")

@@ -1,15 +1,15 @@
 """Transcrição local com faster-whisper (GPU quando disponível), com timestamps por palavra."""
 from __future__ import annotations
 
-import glob
 import os
-import sysconfig
 import threading
 import wave
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
+
+from . import paths
 
 
 def _expose_nvidia_dlls() -> None:
@@ -18,7 +18,7 @@ def _expose_nvidia_dlls() -> None:
     e a transcrição cai para a CPU (~10x mais lenta)."""
     if os.name != "nt":
         return
-    for d in glob.glob(os.path.join(sysconfig.get_paths()["purelib"], "nvidia", "*", "bin")):
+    for d in paths.nvidia_dll_dirs():
         os.add_dll_directory(d)
         os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
 
@@ -39,6 +39,13 @@ def _load(name: str, device: str) -> WhisperModel:
         return _models[key]
 
 
+SAMPLE_RATE = 16000
+# O faster-whisper monta o espectrograma do áudio inteiro de uma vez: numa live de 3 h isso
+# passa de 2 GB de RAM. Em blocos de 10 min o pico fica em ~0,3 GB, qualquer que seja a duração.
+BLOCK_SECONDS = 600
+CUT_SEARCH_SECONDS = 15  # o corte entre blocos cai no trecho mais silencioso desta janela
+
+
 def transcribe(
     audio: Path,
     model_name: str,
@@ -49,7 +56,9 @@ def transcribe(
 ) -> dict:
     try:
         return _run(_load(model_name, "cuda"), audio, language, duration, on_progress, "cuda")
-    except Exception as exc:  # CUDA/cuDNN ausente só aparece na hora de transcrever
+    except MemoryError:
+        raise RuntimeError("memória RAM insuficiente para transcrever; feche outros programas e tente de novo") from None
+    except Exception as exc:  # CUDA/cuDNN ausente ou sem memória de vídeo só aparece na hora de transcrever
         gpu_error = str(exc)
     on_fallback(gpu_error)
     try:
@@ -60,36 +69,66 @@ def transcribe(
     return result
 
 
-def _load_wav(path: Path) -> np.ndarray:
-    """Lê o WAV PCM 16 kHz mono gerado pelo ffmpeg (evita o decodificador PyAV do faster-whisper)."""
-    with wave.open(str(path), "rb") as wav:
-        if wav.getframerate() != 16000 or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
-            raise RuntimeError("áudio precisa ser PCM 16 kHz mono")
-        pcm = wav.readframes(wav.getnframes())
-    return np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
+def _read(wav: wave.Wave_read, start: int, count: int) -> np.ndarray:
+    wav.setpos(start)
+    return np.frombuffer(wav.readframes(count), np.int16).astype(np.float32) / 32768.0
+
+
+def _quietest(samples: np.ndarray) -> int:
+    """Índice do centro do trecho de 100 ms com menos energia (onde ninguém está no meio de uma palavra)."""
+    hop = SAMPLE_RATE // 10
+    usable = len(samples) // hop * hop
+    if not usable:
+        return len(samples) // 2
+    energy = np.square(samples[:usable].reshape(-1, hop)).mean(axis=1)
+    return int(energy.argmin()) * hop + hop // 2
+
+
+def _blocks(wav: wave.Wave_read):
+    """Lê o WAV PCM 16 kHz mono (gerado pelo ffmpeg) em blocos, sem carregar o arquivo inteiro.
+    Devolve (início em amostras, amostras do bloco)."""
+    if wav.getframerate() != SAMPLE_RATE or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+        raise RuntimeError("áudio precisa ser PCM 16 kHz mono")
+    total, start = wav.getnframes(), 0
+    block, search = BLOCK_SECONDS * SAMPLE_RATE, CUT_SEARCH_SECONDS * SAMPLE_RATE
+    while start < total:
+        end = start + block
+        if end + search >= total:
+            end = total
+        else:
+            end = end - search + _quietest(_read(wav, end - search, 2 * search))
+        yield start, _read(wav, start, end - start)
+        start = end
 
 
 def _run(model, audio, language, duration, on_progress, device) -> dict:
-    segments_iter, info = model.transcribe(
-        _load_wav(audio),
-        language=language or None,
-        word_timestamps=True,
-        vad_filter=True,
-        beam_size=5,
-    )
-    segments = []
-    for seg in segments_iter:
-        words = [
-            {"w": w.word.strip(), "s": round(w.start, 3), "e": round(w.end, 3)}
-            for w in (seg.words or [])
-            if w.word.strip()
-        ]
-        if not words:
-            continue
-        segments.append({"s": round(seg.start, 3), "e": round(seg.end, 3), "text": seg.text.strip(), "words": words})
-        if duration:
-            on_progress(min(seg.end / duration, 1.0))
-    return {"language": info.language, "device": device, "segments": segments}
+    segments, detected, context = [], language or None, None
+    with wave.open(str(audio), "rb") as wav:
+        for first_sample, samples in _blocks(wav):
+            offset = first_sample / SAMPLE_RATE
+            segments_iter, info = model.transcribe(
+                samples,
+                language=detected,
+                word_timestamps=True,
+                vad_filter=True,
+                beam_size=5,
+                initial_prompt=context,  # continuidade de nomes e gírias entre blocos
+            )
+            detected = detected or info.language  # o 1º bloco decide; evita trocar de idioma no meio
+            for seg in segments_iter:
+                words = [
+                    {"w": w.word.strip(), "s": round(w.start + offset, 3), "e": round(w.end + offset, 3)}
+                    for w in (seg.words or [])
+                    if w.word.strip()
+                ]
+                if not words:
+                    continue
+                segments.append({"s": round(seg.start + offset, 3), "e": round(seg.end + offset, 3),
+                                 "text": seg.text.strip(), "words": words})
+                if duration:
+                    on_progress(min((seg.end + offset) / duration, 1.0))
+            context = " ".join(s["text"] for s in segments[-3:])[-200:] or None
+    return {"language": detected, "device": device, "segments": segments}
 
 
 def all_words(transcript: dict) -> list[dict]:

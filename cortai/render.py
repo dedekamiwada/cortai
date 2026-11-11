@@ -13,6 +13,7 @@ Efeitos:
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -23,6 +24,7 @@ OUT_W, OUT_H = 1080, 1920
 SPLIT_TOP = 768  # altura do painel da webcam; o jogo fica com 1152
 ZOOM = 1.32
 ZOOM_HOLD = 1.4
+LOUDNESS, TRUE_PEAK = -14, -2.0  # TikTok/Reels/Shorts; pico com folga porque o AAC sobe os picos ~1 dB
 _encoder: list[str] | None = None
 
 
@@ -47,6 +49,36 @@ def _run_encode(args_before_enc: list[str], args_after_enc: list[str], cwd: Path
             return
         error = proc.stderr[-1500:]
     raise RuntimeError(f"ffmpeg falhou ao renderizar: {error}")
+
+
+def _audio_parts(tm: TimeMap) -> tuple[str, str]:
+    """Grafo de áudio dos trechos mantidos (jump cuts). Devolve (filtros, rótulo de saída)."""
+    if not tm.trimmed:
+        return "", "0:a:0"
+    parts = [f"[0:a:0]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}]" for i, (a, b) in enumerate(tm.keep)]
+    parts.append("".join(f"[a{i}]" for i in range(len(tm.keep))) + f"concat=n={len(tm.keep)}:v=0:a=1[ain]")
+    return ";".join(parts) + ";", "ain"
+
+
+def _loudnorm(src: Path, start: float, dur: float, tm: TimeMap) -> str | None:
+    """1ª passada do loudnorm: mede o áudio exatamente como vai sair (com os cortes). Devolve o
+    filtro da 2ª passada, linear (sem "bombear" o volume), ou None para clipe sem som."""
+    pre, label = _audio_parts(tm)
+    graph = pre + f"[{label}]loudnorm=I={LOUDNESS}:TP={TRUE_PEAK}:LRA=11:print_format=json[m]"
+    proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}",
+                           "-filter_complex", graph, "-map", "[m]", "-f", "null", "-"],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    text = proc.stderr
+    try:
+        m = json.loads(text[text.rindex("{"):text.rindex("}") + 1])
+        values = {k: float(m[k]) for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")}
+    except (ValueError, KeyError):
+        return None
+    if values["input_i"] < -60:  # silêncio: não há o que nivelar
+        return None
+    return (f"loudnorm=I={LOUDNESS}:TP={TRUE_PEAK}:LRA=11:measured_I={values['input_i']}:"
+            f"measured_TP={values['input_tp']}:measured_LRA={values['input_lra']}:"
+            f"measured_thresh={values['input_thresh']}:offset={values['target_offset']}:linear=true,aresample=48000")
 
 
 def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[dict], opts: dict,
@@ -86,20 +118,22 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         subs = ",subtitles=subs.ass"
     (out_dir / "clip.srt").write_text(captions.build_srt(mapped, 0.0, out_dur, cap_opts), encoding="utf-8")
 
-    # ---- jump cuts: concatena os trechos mantidos
+    # ---- jump cuts: concatena os trechos mantidos (vídeo aqui; o áudio em _audio_parts)
     pre = ""
-    vin, ain = "0:v", "0:a:0"
+    vin = "0:v"
     if tm.trimmed:
-        parts = []
-        for i, (a, b) in enumerate(tm.keep):
-            parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[v{i}]")
-            if has_audio:
-                parts.append(f"[0:a:0]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}]")
-        joined = "".join(f"[v{i}]" + (f"[a{i}]" if has_audio else "") for i in range(len(tm.keep)))
-        out_labels = "[vin][ain]" if has_audio else "[vin]"
-        parts.append(f"{joined}concat=n={len(tm.keep)}:v=1:a={1 if has_audio else 0}{out_labels}")
+        parts = [f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[v{i}]" for i, (a, b) in enumerate(tm.keep)]
+        parts.append("".join(f"[v{i}]" for i in range(len(tm.keep))) + f"concat=n={len(tm.keep)}:v=1:a=0[vin]")
         pre = ";".join(parts) + ";"
-        vin, ain = "vin", "ain"
+        vin = "vin"
+
+    # ---- áudio: mesmos cortes e, se ligado, volume padrão das redes (-14 LUFS, pico -1 dB)
+    audio_pre, ain = _audio_parts(tm) if has_audio else ("", "")
+    level = _loudnorm(src, start, dur, tm) if has_audio and opts.get("normalize_audio", True) else None
+    if level:
+        audio_pre += f"[{ain}]{level}[aout];"
+        ain = "aout"
+    pre += audio_pre
 
     # ---- layout → [lay], e onde o rosto fica no quadro final (para mirar o zoom)
     crop_w, crop_h = _even(h * 9 / 16), _even(h)
@@ -170,7 +204,7 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
             "-filter_complex", pre + chain, "-map", "[v]"]
     audio = []
     if has_audio:
-        audio = ["-map", f"[{ain}]" if tm.trimmed else ain, "-c:a", "aac", "-b:a", "160k"]
+        audio = ["-map", ain if ain == "0:a:0" else f"[{ain}]", "-c:a", "aac", "-b:a", "192k"]
     tail = ["-r", f"{min(meta.get('fps') or 30, 60):.3f}", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "clip.mp4"]
     _run_encode(base, audio + tail, out_dir)
 
@@ -180,6 +214,7 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         "layout": layout, "face_ratio": round(face_ratio, 2),
         "out_duration": round(out_dur, 2), "removed": round(dur - out_dur, 2),
         "zooms_applied": len(zoom_windows),
+        "audio_normalized": bool(level),
         "srt": "clip.srt",
     }
 

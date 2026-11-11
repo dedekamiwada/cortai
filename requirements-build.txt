@@ -1,0 +1,17 @@
+# Versões testadas da pasta portátil (build.bat). Fixadas de propósito: o OpenCV 5
+# removeu o detector de rosto e o executável deve sair igual a cada build.
+fastapi==0.162.2
+uvicorn==0.46.0
+python-multipart==0.0.28
+faster-whisper==1.2.1
+ctranslate2==4.8.4
+opencv-python==4.14.*
+numpy==2.4.4
+anthropic==0.102.0
+yt-dlp==2026.10.26
+pywebview==6.2.1
+pythonnet==3.2.1
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.27.0.42
+nvidia-cuda-nvrtc-cu12==12.9.86
+pyinstaller==6.22.3

@@ -2,3 +2,6 @@ jobs/
 __pycache__/
 *.pyc
 .venv/
+build/
+dist/
+.dados.txt.bak

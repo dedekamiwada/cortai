@@ -40,7 +40,22 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Abre em http://127.0.0.1:8765. Precisa de `ffmpeg`/`ffprobe` no PATH. Os projetos ficam em `jobs/`.
+Abre o Cortaí numa janela própria (WebView2, via `pywebview`); sem o `pywebview` instalado, abre http://127.0.0.1:8765 no navegador. Com `CORTAI_NO_BROWSER=1` sobe só o servidor. Precisa de `ffmpeg`/`ffprobe` no PATH. Os projetos ficam em `jobs/`.
+
+## Versão portátil (Windows)
+
+Rode `build.bat` para gerar `dist\Cortai\`, uma pasta de cerca de 1,5 GB com o `Cortai.exe`, Python, dependências, ffmpeg e o que a GPU precisa. Copie a pasta inteira, não só o `.exe`. Não precisa instalar Python nem ffmpeg no PC de destino.
+
+- Abra o `Cortai.exe`: o Cortaí abre como programa, em janela própria, sem navegador nem console. Abrir de novo só traz a janela para a frente.
+- Fechar a janela encerra o Cortaí. Se houver corte ou exportação em andamento, ele pergunta antes, e o ffmpeg/Claude em execução é encerrado junto.
+- Downloads de clipes abrem o "Salvar como" do Windows. Mensagens de erro ficam em `%LOCALAPPDATA%\Cortai\cortai.log`.
+- Precisa do WebView2 Runtime, que já vem no Windows 11 e no Windows 10 atualizado.
+- Os projetos ficam em `Vídeos\Cortai`, fora da pasta do programa. Para usar outro lugar, crie ao lado do `.exe` um `dados.txt` com o caminho da pasta.
+- O modelo do Whisper (1,6 GB no `large-v3-turbo`) é baixado no primeiro uso.
+- Para a IA escolher os cortes, cada PC precisa do Claude Code instalado e logado ou de `ANTHROPIC_API_KEY`. O Estúdio não precisa de nenhum dos dois.
+- Sem GPU NVIDIA compatível, a transcrição usa a CPU e fica bem mais lenta.
+
+A pasta `dist/` não vai para o repositório. Antes de distribuir a pasta para outras pessoas, confira as licenças do ffmpeg e das bibliotecas da NVIDIA.
 
 ## Escolhendo como falar com o Claude
 

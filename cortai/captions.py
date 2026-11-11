@@ -19,7 +19,20 @@ POSITIONS = {  # alinhamento ASS (numpad) e margem vertical em 1080x1920
     "top": (8, 380),
 }
 
-TITLE_POSITIONS = {"top": 150, "upper": 600}  # margem do topo: no alto ou abaixo da webcam
+# Centro vertical do título (1080x1920). "band" cobre a faixa de título que lives verticais
+# (TikTok LIVE Studio) desenham entre a webcam e o jogo.
+TITLE_POSITIONS = {"top": 230, "upper": 690, "band": 876, "bottom": 1480}
+# Estilos de título de canal de cortes, todos sobre uma faixa de lado a lado (cores ASS em BGR).
+# chars = quantos caracteres cabem por linha no tamanho cheio (depende da largura da fonte).
+TITLE_STYLES = {
+    "impacto": {"label": "Impact + amarelo", "font": "Impact", "size": 108, "chars": 18, "text": "&HFFFFFF&",
+                "outline": 8, "highlight": "&H00D4FF&", "bar": "&H100E0E&", "glow": None},
+    "faixa": {"label": "Faixa amarela", "font": "Segoe UI Black", "size": 80, "chars": 22, "text": "&H101010&",
+              "outline": 0, "highlight": None, "bar": "&H00D4FF&", "glow": None},
+    "neon": {"label": "Contorno lima", "font": "Arial Black", "size": 86, "chars": 18, "text": "&HFFFFFF&",
+             "outline": 9, "highlight": "&H27F2B9&", "bar": "&H161010&", "glow": "&H27F2B9&"},
+}
+TITLE_MIN_SCALE = 0.7  # títulos longos diminuem até 70% antes de passar de 3 linhas
 HOOK_SECONDS = 3.5  # modo "gancho": título só no começo
 MAX_GAP = 0.5
 
@@ -33,7 +46,9 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H78000000,-1,0,0,0,100,100,1,0,1,{outline},{shadow},{align},70,70,{margin},1
-Style: Title,Arial Black,58,&H00FFFFFF,&H000000FF,&HC8000000,&HC8000000,-1,0,0,0,100,100,0,0,3,18,0,8,90,90,{title_margin},1
+Style: Title,{title_font},{title_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,{title_outline},0,5,40,40,0,1
+Style: TitleGlow,{title_font},{title_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,{title_glow_w},0,5,40,40,0,1
+Style: TitleBar,Arial,10,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -88,6 +103,59 @@ def _keyword_set(keywords: list[str] | None) -> set[str]:
     return out
 
 
+def _title_lines(title: str, style: dict) -> tuple[list[str], int]:
+    """Quebra o título em até 3 linhas e escolhe o tamanho da fonte para caber na largura."""
+    words = title.split()
+    full = style["size"]
+    for size in range(full, int(full * TITLE_MIN_SCALE) - 1, -6):
+        limit = int(style["chars"] * full / size)
+        lines, cur = [], ""
+        for w in words:
+            if cur and len(cur) + 1 + len(w) > limit:
+                lines.append(cur)
+                cur = w
+            else:
+                cur = f"{cur} {w}".strip()
+        lines.append(cur)
+        if len(lines) <= 3:
+            return lines, size
+    return lines, size
+
+
+def _title_events(text: str, keywords: list[str] | None, dur: float, mode: str, position, style: dict) -> list[str]:
+    """Título sobre uma faixa de lado a lado, que também esconde o que houver embaixo (como o título
+    que a própria live desenha). Palavra-chave do clipe em destaque; sem ela, a palavra mais longa."""
+    title = _escape(text.strip().upper())
+    lines, size = _title_lines(title, style)
+    words = [w for line in lines for w in line.split()]
+    marked: set[str] = set()
+    if style["highlight"] and words:
+        keys = _keyword_set(keywords)
+        marked = {w for w in words if _norm(w) in keys} or {max(words, key=lambda w: len(_norm(w)))}
+
+    def paint(line: str) -> str:
+        return " ".join(f"{{\\c{style['highlight']}}}{w}{{\\c{style['text']}}}" if w in marked else w
+                        for w in line.split())
+
+    y = TITLE_POSITIONS.get(position, TITLE_POSITIONS["top"])
+    line_h = round(size * 1.05)
+    bar_h = line_h * len(lines) + 56
+    top = max(0, min(1920 - bar_h, y - bar_h // 2))
+    center = top + bar_h // 2
+    end = min(dur, HOOK_SECONDS) if mode == "hook" else dur
+    fx = "\\fad(120,250)" if mode == "hook" else "\\fad(150,0)"
+    pop = "\\t(0,180,\\fscx106\\fscy106)\\t(180,320,\\fscx100\\fscy100)" if mode == "hook" else ""
+    head = f"{{\\pos(540,{center}){fx}{pop}\\fs{size}\\c{style['text']}"
+    span = f"{_ts(0)},{_ts(end)}"
+    events = [f"Dialogue: 1,{span},TitleBar,,0,0,0,,{{\\pos(0,{top})\\1c{style['bar']}{fx}\\p1}}"
+              f"m 0 0 l 1080 0 1080 {bar_h} 0 {bar_h}{{\\p0}}\n"]
+    if style["glow"]:  # contorno colorido borrado por trás do contorno preto
+        events.append(f"Dialogue: 2,{span},TitleGlow,,0,0,0,,{head}\\1c{style['glow']}\\3c{style['glow']}\\blur3}}"
+                      + "\\N".join(lines) + "\n")
+    events.append(f"Dialogue: 3,{span},Title,,0,0,0,,{head}}}" + "\\N".join(paint(line) for line in lines) + "\n")
+    return events
+
+
 def _chunks(words: list[dict], max_words: int, max_chars: int) -> list[list[dict]]:
     chunks: list[list[dict]] = []
     cur: list[dict] = []
@@ -111,18 +179,16 @@ def build_ass(words: list[dict], clip_start: float, clip_end: float, opts: dict)
     align, margin = POSITIONS.get(opts.get("caption_position") or "bottom", POSITIONS["bottom"])
     hi = _ass_color(opts.get("caption_color", "#FFE600"))
     upper = bool(opts.get("caption_upper", True))
-    title_margin = TITLE_POSITIONS.get(opts.get("title_position") or "top", TITLE_POSITIONS["top"])
+    tstyle = TITLE_STYLES.get(opts.get("title_style") or "impacto", TITLE_STYLES["impacto"])
     lines = [HEADER.format(font=preset["font"], size=preset["size"], outline=preset["outline"],
-                           shadow=preset["shadow"], align=align, margin=margin, title_margin=title_margin)]
+                           shadow=preset["shadow"], align=align, margin=margin, title_font=tstyle["font"],
+                           title_size=tstyle["size"], title_outline=tstyle["outline"],
+                           title_glow_w=tstyle["outline"] * 2)]
     dur = clip_end - clip_start
 
     if opts.get("title_overlay") and (opts.get("title_text") or "").strip():
-        title = _escape(opts["title_text"].strip().upper())
-        if opts.get("title_mode") == "hook":
-            lines.append(f"Dialogue: 1,{_ts(0)},{_ts(min(dur, HOOK_SECONDS))},Title,,0,0,0,,"
-                         f"{{\\fad(120,250)\\t(0,180,\\fscx106\\fscy106)\\t(180,320,\\fscx100\\fscy100)}}{title}\n")
-        else:
-            lines.append(f"Dialogue: 1,{_ts(0)},{_ts(dur)},Title,,0,0,0,,{{\\fad(150,0)}}{title}\n")
+        lines += _title_events(opts["title_text"], opts.get("keywords"), dur, opts.get("title_mode") or "always",
+                               opts.get("title_position") or "top", tstyle)
 
     if not opts.get("captions", True):
         return "".join(lines)

@@ -84,6 +84,20 @@ def mutate(pid: str, fn) -> dict:
         return p
 
 
+def busy() -> bool:
+    """Há exportação ou preparo de mídia em andamento em algum projeto."""
+    for f in ROOT.glob("*/project.json"):
+        try:
+            p = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if (p.get("export") or {}).get("status") == "running":
+            return True
+        if any(a.get("status") == "processing" for a in p["assets"].values()):
+            return True
+    return False
+
+
 def list_projects() -> list[dict]:
     out = []
     for f in ROOT.glob("*/project.json"):

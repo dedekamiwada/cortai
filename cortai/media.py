@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Callable
+
+from . import paths
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
@@ -18,10 +19,10 @@ def run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
 
 
 def download(url: str, dest_dir: Path, max_height: int = 1080) -> tuple[Path, str]:
-    """Baixa o vídeo como source.mp4 com o yt-dlp do Python atual. Devolve (arquivo, título)."""
+    """Baixa o vídeo como source.mp4 com o yt-dlp. Devolve (arquivo, título)."""
     out = dest_dir / "source.%(ext)s"
     proc = run([
-        sys.executable, "-m", "yt_dlp",
+        *paths.yt_dlp_command(),
         "-f", f"bv*[height<={max_height}]+ba/b[height<={max_height}]/b",
         "--merge-output-format", "mp4",
         "--no-playlist", "--no-progress", "--no-simulate", "--print", "after_move:title",
