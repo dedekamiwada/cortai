@@ -230,7 +230,8 @@
 
 <dialog id="editor">
   <div class="ed-head">
-    <input id="ed-title" class="ed-title" maxlength="200">
+    <input id="ed-title" class="ed-title" maxlength="200" list="ed-title-options" title="Clique ou apague o texto para ver as outras opções do Claude">
+    <datalist id="ed-title-options"></datalist>
     <button class="ghost" id="ed-close" aria-label="Fechar">✕</button>
   </div>
   <div id="ed-loading" class="ed-loading">Preparando prévia…</div>

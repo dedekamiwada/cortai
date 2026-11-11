@@ -517,6 +517,11 @@ async function openEditor(jobId, n) {
   vid.onloadedmetadata = () => { vid.currentTime = ed.sel.s - ws; };
 
   $("#ed-title").value = data.clip.title;
+  $("#ed-title-options").innerHTML = (data.clip.title_options || [])
+    .filter((o) => !(o.problems || []).length)
+    .sort((a, b) => b.score - a.score)
+    .map((o) => `<option value="${escapeHtml(o.title)}">${o.formula} · nota ${o.score} · ${o.title.length} car.</option>`)
+    .join("");
   $("#ed-layout").value = o.layout || "auto";
   $("#ed-cropx").value = o.crop_x ?? 0.5;
   $("#ed-captions").checked = o.captions !== false;

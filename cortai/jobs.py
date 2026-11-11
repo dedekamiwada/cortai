@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import captions, edit, frames, media, paths, picker, render, signals, styles, to_studio, transcribe
+from . import captions, edit, frames, media, paths, picker, render, signals, styles, titles, to_studio, transcribe
 
 JOBS_DIR = paths.JOBS_DIR
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -261,7 +261,7 @@ def _run_pipeline(job_id: str) -> None:
     events = signals.audio_events(loud, words)
 
     style = styles.get(JOBS_DIR, opts.get("style_id"))
-    system = picker.system_prompt(opts["content_type"], style)
+    system = picker.system_prompt(opts["content_type"], style) + titles.guide(JOBS_DIR, options=False)
     prompt = picker.build_prompt(transcript, events, src["duration"], opts)
     (d / "prompt.txt").write_text(picker.manual_prompt(system, prompt), encoding="utf-8")
 
@@ -307,6 +307,7 @@ def _visual_review(job_id: str, backend: str, candidates, transcript, events, st
     system = picker.REVIEW_SYSTEM
     if style and style.get("guide"):
         system += f"\n\nGuia de estilo a seguir (\"{style['name']}\"):\n{style['guide']}"
+    system += titles.guide(JOBS_DIR)
     prompt = picker.review_prompt(candidates, transcript, events, windows, [p.name for p in images], opts)
     raw = picker.ask(backend, system, prompt, picker.REVIEW_SCHEMA, images)
     (_dir(job_id) / "review.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -343,6 +344,7 @@ def _accept_plan(job_id: str, raw: dict) -> None:
     for i, c in enumerate(clips, 1):
         c.update({"n": i, "status": "pending", "rev": 0, "review_image": images.get(c["candidate"])})
     update(job_id, clips=clips, status="rendering", progress=0.0)
+    titles.record(JOBS_DIR, job_id, clips)
     _render_all(job_id, words)
 
 
@@ -448,8 +450,12 @@ def rerender(job_id: str, n: int, changes: dict) -> None:
         overrides["word_adds"] = _clean_adds(overrides["word_adds"])
     fields = {"start": round(start, 2), "end": round(end, 2), "overrides": overrides, "status": "pending"}
     if "title" in changes:
-        fields["title"] = str(changes["title"])[:200]
+        fields["title"] = str(changes["title"]).strip()[:200]
+        if fields["title"] != clip["title"]:
+            fields["title_formula"] = titles.formula_of(clip, fields["title"])
     _set_clip(job_id, idx, **fields)
+    if "title_formula" in fields:
+        titles.record(JOBS_DIR, job_id, [{**clip, **fields}])
     _worker.submit(_render_one, job_id, idx, _words(job_id))
 
 
@@ -545,7 +551,7 @@ def export_zip(job_id: str) -> Path:
             if (clip_dir / "clip.srt").exists():
                 z.write(clip_dir / "clip.srt", f"{base}.srt")
             post = c.get("post") or f"{c['title']}\n\n{' '.join(c.get('hashtags', []))}"
-            lines.append(f"### {base}  (score {c['score']})\n{post}\n")
+            lines.append(f"### {base}  (score {c['score']})\nTítulo: {c['title']}\n{post}\n")
         z.writestr("posts.txt", "\n".join(lines))
     return out
 
