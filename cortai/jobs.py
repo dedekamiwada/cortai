@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import edit, frames, media, paths, picker, render, signals, styles, transcribe
+from . import captions, edit, frames, media, paths, picker, render, signals, styles, to_studio, transcribe
 
 JOBS_DIR = paths.JOBS_DIR
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,7 @@ DEFAULT_OPTS = {
 STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color", "caption_upper",
               "caption_position", "keyword_highlight", "keyword_color", "title_overlay", "title_mode",
               "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio")
-CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes")
+CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds")
 SETTINGS_FILE = JOBS_DIR / "_settings.json"
 
 
@@ -394,7 +394,8 @@ def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     opts.setdefault("title_text", clip["title"])
     opts["keywords"] = clip.get("keywords") or []
     try:
-        keep, zooms = _edit_plan(job_id, clip, opts, words)
+        # legenda manual conta como fala: o corte de pausas não apaga o trecho dela
+        keep, zooms = _edit_plan(job_id, clip, opts, captions.with_adds(words, opts.get("word_adds")))
         info = render.render_clip(Path(job["source"]["path"]), job["source"], clip, out_dir, words, opts,
                                   keep=keep, zooms=zooms)
         _set_clip(job_id, idx, status="done", rev=clip.get("rev", 0) + 1,
@@ -403,6 +404,20 @@ def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     except Exception as exc:
         traceback.print_exc()
         _set_clip(job_id, idx, status="error", error=str(exc))
+
+
+def studio_tracks(job_id: str, n: int, seg_start: float, asset_id: str) -> dict:
+    """Faixas do Estúdio para abrir o clipe n como ele foi renderizado (ver to_studio)."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    clip = job["clips"][_clip_index(job, n)]
+    opts = {**job["options"], **clip.get("overrides", {})}
+    opts.setdefault("title_text", clip["title"])
+    opts["keywords"] = clip.get("keywords") or []
+    words = _words(job_id)
+    keep, zooms = _edit_plan(job_id, clip, opts, captions.with_adds(words, opts.get("word_adds")))
+    return to_studio.build(job, clip, opts, words, keep, zooms, seg_start, asset_id)
 
 
 def _clip_index(job: dict, n: int) -> int:
@@ -429,11 +444,28 @@ def rerender(job_id: str, n: int, changes: dict) -> None:
             overrides[key] = changes[key]
     if "word_fixes" in overrides and not isinstance(overrides["word_fixes"], dict):
         raise ValueError("word_fixes precisa ser um objeto {segundo: texto}")
+    if "word_adds" in overrides:
+        overrides["word_adds"] = _clean_adds(overrides["word_adds"])
     fields = {"start": round(start, 2), "end": round(end, 2), "overrides": overrides, "status": "pending"}
     if "title" in changes:
         fields["title"] = str(changes["title"])[:200]
     _set_clip(job_id, idx, **fields)
     _worker.submit(_render_one, job_id, idx, _words(job_id))
+
+
+def _clean_adds(adds) -> list[dict]:
+    """Legendas adicionadas no editor: [{w, s, e}] em segundos do vídeo original."""
+    if not isinstance(adds, list):
+        raise ValueError("word_adds precisa ser uma lista [{w, s, e}]")
+    out = []
+    for a in adds:
+        try:
+            text, s, e = str(a.get("w") or "").strip()[:200], float(a["s"]), float(a["e"])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise ValueError("cada legenda adicionada precisa de texto, início e fim") from None
+        if text and e > s:
+            out.append({"w": text, "s": round(s, 3), "e": round(e, 3)})
+    return sorted(out, key=lambda a: a["s"])
 
 
 def apply_all(job_id: str, changes: dict) -> int:

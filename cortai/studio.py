@@ -137,7 +137,7 @@ _ITEM_KEYS = {
     "overlay": {"id", "asset", "start", "in", "out", "x", "y", "scale", "opacity", "volume", "mute",
                 "brightness", "contrast", "saturation"},
     "text": {"id", "start", "dur", "text", "font", "size", "color", "stroke", "stroke_w", "bg", "x", "y",
-             "anim", "bold", "italic", "align"},
+             "anim", "bold", "italic", "align", "words", "hl", "hl_mode", "hl_pop", "kw_idx", "kw_color"},
     "audio": {"id", "asset", "start", "in", "out", "volume", "fade_in", "fade_out", "speed"},
 }
 

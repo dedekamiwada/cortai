@@ -76,20 +76,59 @@ def _escape(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")")
 
 
-def apply_fixes(words: list[dict], fixes: dict[str, str] | None) -> list[dict]:
-    """Troca o texto de palavras corrigidas no editor (chave = início da palavra com 2 casas)."""
-    if not fixes:
-        return words
-    out = []
-    for w in words:
-        key = f"{w['s']:.2f}"
-        if key in fixes:
-            text = str(fixes[key]).strip()
-            if not text:
-                continue  # palavra apagada
-            w = {**w, "w": text}
-        out.append(w)
+def expand_adds(adds: list[dict] | None) -> list[dict]:
+    """Legendas adicionadas à mão no editor ({w, s, e} em segundos do vídeo original) viram
+    palavras: um texto com várias palavras é dividido igualmente no intervalo. `added` guarda
+    o número da legenda, para ela não se misturar com a fala vizinha no mesmo bloco."""
+    out: list[dict] = []
+    for g, a in enumerate(adds or [], 1):
+        try:
+            s, e = float(a["s"]), float(a["e"])
+            parts = str(a.get("w") or "").split()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not parts or e <= s:
+            continue
+        step = (e - s) / len(parts)
+        out += [{"w": p, "s": round(s + i * step, 3), "e": round(s + (i + 1) * step, 3), "added": g}
+                for i, p in enumerate(parts)]
     return out
+
+
+def with_adds(words: list[dict], adds: list[dict] | None) -> list[dict]:
+    extra = expand_adds(adds)
+    return sorted(words + extra, key=lambda w: w["s"]) if extra else words
+
+
+def apply_fixes(words: list[dict], fixes: dict[str, str] | None, adds: list[dict] | None = None) -> list[dict]:
+    """Troca o texto de palavras corrigidas no editor (chave = início da palavra com 2 casas)
+    e acrescenta as legendas adicionadas à mão (que escondem a fala no mesmo intervalo)."""
+    out = words
+    if fixes:
+        out = []
+        for w in words:
+            key = f"{w['s']:.2f}"
+            if key in fixes:
+                text = str(fixes[key]).strip()
+                if not text:
+                    continue  # palavra apagada
+                w = {**w, "w": text}
+            out.append(w)
+    extra = expand_adds(adds)
+    if not extra:
+        return out
+    # a legenda adicionada toma o lugar da fala no trecho dela (senão as duas se alternam na tela)
+    spans = [(a["s"], a["e"]) for a in adds if isinstance(a, dict) and a.get("w")]
+    out = [w for w in out if not any(_covers(sp, w) for sp in spans)]
+    return sorted(out + extra, key=lambda w: w["s"])
+
+
+def _covers(span, w: dict) -> bool:
+    try:
+        s, e = float(span[0]), float(span[1])
+    except (TypeError, ValueError):
+        return False
+    return s - 0.05 <= w["s"] < e
 
 
 def _norm(text: str) -> str:
@@ -164,7 +203,8 @@ def _chunks(words: list[dict], max_words: int, max_chars: int) -> list[list[dict
             text_len = sum(len(x["w"]) + 1 for x in cur) + len(w["w"])
             gap = w["s"] - cur[-1]["e"]
             ends_sentence = cur[-1]["w"][-1:] in ".?!…"
-            if len(cur) >= max_words or text_len > max_chars or gap > MAX_GAP or ends_sentence:
+            other_source = cur[-1].get("added") != w.get("added")  # legenda manual fica no próprio bloco
+            if len(cur) >= max_words or text_len > max_chars or gap > MAX_GAP or ends_sentence or other_source:
                 chunks.append(cur)
                 cur = []
         cur.append(w)
@@ -193,7 +233,7 @@ def build_ass(words: list[dict], clip_start: float, clip_end: float, opts: dict)
     if not opts.get("captions", True):
         return "".join(lines)
 
-    inside = [w for w in apply_fixes(words, opts.get("word_fixes")) if w["e"] > clip_start and w["s"] < clip_end]
+    inside = [w for w in apply_fixes(words, opts.get("word_fixes"), opts.get("word_adds")) if w["e"] > clip_start and w["s"] < clip_end]
     chunks = _chunks(inside, preset["max_words"], preset["max_chars"])
     pop = preset["pop"]
     keys = _keyword_set(opts.get("keywords")) if opts.get("keyword_highlight", True) else set()
@@ -225,7 +265,7 @@ def build_ass(words: list[dict], clip_start: float, clip_end: float, opts: dict)
 
 def build_srt(words: list[dict], clip_start: float, clip_end: float, opts: dict) -> str:
     """Legenda .srt (para subir como legenda nativa no TikTok/YouTube), em frases curtas."""
-    inside = [w for w in apply_fixes(words, opts.get("word_fixes")) if w["e"] > clip_start and w["s"] < clip_end]
+    inside = [w for w in apply_fixes(words, opts.get("word_fixes"), opts.get("word_adds")) if w["e"] > clip_start and w["s"] < clip_end]
 
     def stamp(t: float) -> str:
         ms = int(round(max(0.0, t) * 1000))

@@ -419,6 +419,8 @@ function syncStage(seek = false) {
     const fit = it.fit || "fill";
     media.style.objectFit = fit === "fill" ? "cover" : "contain";
     media.style.objectPosition = `${50 + 50 * (it.pan_x || 0)}% ${50 + 50 * (it.pan_y || 0)}%`;
+    // o zoom amplia a partir do ponto da posição, como o recorte da exportação
+    media.style.transformOrigin = media.style.objectPosition;
     let transform = fit === "fill" && (it.zoom || 1) > 1 ? `scale(${it.zoom})` : "";
     media.style.filter = cssFilter(it);
     let opacity = 1, clip = "none";
@@ -468,7 +470,9 @@ function syncStage(seek = false) {
     const an = textAnim(it.anim, T - it.start, it.dur);
     const size = (it.size || 80) * K;
     const st = l.el.style;
-    l.el.textContent = it.text || "";
+    const html = richText(it, T - it.start);
+    if (html === null) { if (l.el._html !== undefined || l.el.textContent !== (it.text || "")) { l.el.textContent = it.text || ""; delete l.el._html; } }
+    else if (l.el._html !== html) { l.el.innerHTML = html; l.el._html = html; }
     st.display = "block";
     st.left = `${(it.x ?? 0.5) * 100}%`;
     st.top = `${(it.y ?? 0.5) * 100}%`;
@@ -545,6 +549,53 @@ function transitionStyle(type, p, transform) {
     default: out.opacity = p;
   }
   return out;
+}
+// texto vindo de um clipe do Cortaí: palavra falada em destaque (karaokê) e palavras-chave
+function wordSpans(it, count) {
+  const dur = Math.max(0.1, it.dur || 3);
+  const sp = it.words || [];
+  if (sp.length === count && count) return sp.map(([a, b]) => [Math.max(0, a), Math.min(dur, b)]);
+  const step = dur / Math.max(1, count);
+  return Array.from({ length: count }, (_, i) => [i * step, (i + 1) * step]);
+}
+function richText(it, t) {
+  const kw = new Set((it.kw_idx || []).map(Number));
+  const lines = String(it.text || "").split("\n").map((l) => l.split(/\s+/).filter(Boolean));
+  const count = lines.reduce((a, l) => a + l.length, 0);
+  const mode = it.hl_mode || "color";
+  const karaoke = (it.words || []).length > 0 && (mode === "color" || mode === "box") && count > 0;
+  if (!karaoke && !kw.size) return null;
+  let active = -1;
+  if (karaoke) {
+    active = 0;
+    wordSpans(it, count).forEach(([a], k) => { if (k > 0 && t >= a) active = k; });
+  }
+  const pop = `display:inline-block;margin:0 .06em;transform:scale(${(it.hl_pop || 110) / 100})`;
+  let k = 0;
+  return lines.map((line) => line.map((w) => {
+    const i = k++, txt = esc(w);
+    if (i === active && mode === "box")
+      return `<span style="${pop};background:${esc(it.hl || "#FFE600")};color:#111;-webkit-text-stroke:0;padding:0 .12em;border-radius:.12em">${txt}</span>`;
+    if (i === active) return `<span style="${pop};color:${esc(it.hl || "#FFE600")}">${txt}</span>`;
+    if (kw.has(i)) return `<span style="color:${esc(it.kw_color || "#39E75F")}">${txt}</span>`;
+    return txt;
+  }).join(" ")).join("<br>");
+}
+// dividir um texto com destaque: cada metade fica com as suas palavras e tempos
+function splitRich(it, cut) {
+  if (!(it.words || []).length && !(it.kw_idx || []).length) return null;
+  const tokens = String(it.text || "").split(/\s+/).filter(Boolean);
+  const sp = wordSpans(it, tokens.length);
+  const k = sp.filter(([a]) => a < cut).length;
+  if (k <= 0 || k >= tokens.length) return null;
+  const kw = (it.kw_idx || []).map(Number);
+  const hasWords = (it.words || []).length > 0;
+  return {
+    a: { text: tokens.slice(0, k).join(" "), kw_idx: kw.filter((i) => i < k),
+         words: hasWords ? sp.slice(0, k).map(([a, b]) => [a, Math.min(b, cut)]) : undefined },
+    b: { text: tokens.slice(k).join(" "), kw_idx: kw.filter((i) => i >= k).map((i) => i - k),
+         words: hasWords ? sp.slice(k).map(([a, b]) => [+(a - cut).toFixed(3), +(b - cut).toFixed(3)]) : undefined },
+  };
 }
 function textAnim(anim, t, dur) {
   const r = { opacity: 1, scale: 1, dy: 0 };
@@ -857,6 +908,8 @@ function splitAtPlayhead() {
     const copy = JSON.parse(JSON.stringify(it));
     copy.id = uid(track === "text" ? "t" : "i");
     if (track === "text") {
+      const parts = splitRich(it, T - it.start);
+      if (parts) { Object.assign(it, parts.a); Object.assign(copy, parts.b); }
       copy.start = +T.toFixed(3); copy.dur = +(it.start + it.dur - T).toFixed(3);
       it.dur = +(T - it.start).toFixed(3);
       P.tracks.text.push(copy);
@@ -930,6 +983,14 @@ function renderInspector() {
       ${row2("Contorno", `<input type="color" data-k="stroke" value="${it.stroke || "#000000"}">`)}
       ${slider("Espessura", "stroke_w", 0, 20, 0.5, it.stroke_w ?? 5)}
       ${row2("Fundo", `<label class="check"><input type="checkbox" data-k="bg_on" ${it.bg ? "checked" : ""}> caixa</label> <input type="color" data-k="bg" value="${it.bg || "#E8336B"}">`)}`));
+    if ((it.words || []).length) {
+      h.push(group("Destaque da palavra falada", `${seg("", "hl_mode", [["none", "Nenhum"], ["color", "Cor"], ["box", "Marca-texto"]], it.hl_mode || "color")}
+        ${row2("Cor", `<input type="color" data-k="hl" value="${esc(it.hl || "#FFE600")}">`)}
+        <p class="muted small">Veio da legenda do clipe. Se mudar o número de palavras, o destaque passa a dividir o tempo igualmente.</p>`));
+    }
+    if ((it.kw_idx || []).length) {
+      h.push(group("Palavras-chave", row2("Cor", `<input type="color" data-k="kw_color" value="${esc(it.kw_color || "#39E75F")}">`)));
+    }
     h.push(group("Animação de entrada", seg("", "anim", [["none", "Nenhuma"], ["fade", "Esmaecer"], ["pop", "Pop"], ["slide", "Subir"], ["zoom", "Zoom"]], it.anim || "none")));
     h.push(group("Posição e tempo", `${slider("X", "x", 0, 1, 0.005, it.x ?? 0.5)}${slider("Y", "y", 0, 1, 0.005, it.y ?? 0.5)}
       ${num("Início (s)", "start", it.start)}${num("Duração (s)", "dur", it.dur)}`));
@@ -1033,7 +1094,7 @@ function bindInspector(box, it, track) {
   const a = assetOf(it);
   const set = (k, round = 3) => (v) => (it[k] = typeof v === "number" ? +v.toFixed(round) : v);
   ["text", "font", "color", "stroke", "x", "y", "scale", "opacity", "brightness", "contrast", "saturation", "volume",
-    "fade_in", "fade_out", "zoom", "pan_x", "pan_y", "stroke_w", "size"].forEach((k) => liveInput(box, k, it, set(k)));
+    "fade_in", "fade_out", "zoom", "pan_x", "pan_y", "stroke_w", "size", "hl", "kw_color"].forEach((k) => liveInput(box, k, it, set(k)));
   liveInput(box, "start", it, (v) => (it.start = Math.max(0, +v.toFixed(3))));
   liveInput(box, "dur", it, (v) => (it.dur = Math.max(0.2, +v.toFixed(3))));
   liveInput(box, "in", it, (v) => (it.in = clamp(+v.toFixed(3), 0, it.out - 0.1)));
@@ -1047,6 +1108,7 @@ function bindInspector(box, it, track) {
   const tt = $('[data-k="ttype"]', box);
   if (tt) tt.onchange = () => commit(() => (it.transition = tt.value === "none" ? undefined : { type: tt.value, dur: it.transition?.dur || 0.5 }));
   bindSeg(box, "anim", (v) => commit(() => (it.anim = v)));
+  bindSeg(box, "hl_mode", (v) => commit(() => (it.hl_mode = v)));
   bindSeg(box, "fit", (v) => commit(() => (it.fit = v)));
   bindSeg(box, "speedp", (v) => commit(() => (it.speed = +v)));
   bindSeg(box, "style", (v) => commit(() => (v === "b" ? (it.bold = it.bold === false) : (it.italic = !it.italic))));

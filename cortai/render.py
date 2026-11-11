@@ -109,9 +109,10 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
     face = reframe.face_box(boxes)
 
     # ---- legendas no tempo do vídeo final
-    inside = [x for x in captions.apply_fixes(words, opts.get("word_fixes")) if x["e"] > start and x["s"] < end]
+    inside = [x for x in captions.apply_fixes(words, opts.get("word_fixes"), opts.get("word_adds"))
+              if x["e"] > start and x["s"] < end]
     mapped = [{**x, "s": tm.to_out(x["s"] - start), "e": tm.to_out(x["e"] - start)} for x in inside]
-    cap_opts = {**opts, "word_fixes": None}
+    cap_opts = {**opts, "word_fixes": None, "word_adds": None}
     subs = ""
     if (opts.get("captions", True) and mapped) or opts.get("title_overlay"):
         (out_dir / "subs.ass").write_text(captions.build_ass(mapped, 0.0, out_dur, cap_opts), encoding="utf-8")

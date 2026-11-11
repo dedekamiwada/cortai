@@ -52,6 +52,51 @@ def _ts(t: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
+def _tokens(text: str) -> list[list[str]]:
+    """Palavras por linha (o destaque conta as palavras em sequência, atravessando as linhas)."""
+    return [line.split() for line in text.split("\n")]
+
+
+def word_spans(t: dict, count: int) -> list[tuple[float, float]]:
+    """Tempo de cada palavra (relativo ao início do texto). Se o texto foi editado e o número de
+    palavras mudou, divide a duração igualmente."""
+    dur = max(0.1, float(t.get("dur", 3)))
+    spans = t.get("words") or []
+    if len(spans) == count and count:
+        out = []
+        for a, b in spans:
+            a, b = max(0.0, float(a)), min(dur, float(b))
+            out.append((a, max(b, a + 0.04)))
+        return out
+    step = dur / max(1, count)
+    return [(i * step, (i + 1) * step) for i in range(count)]
+
+
+def _rich(t: dict, lines: list[list[str]], active: int | None, base: str, base_color: str) -> str:
+    """Texto com a palavra `active` em destaque e as palavras-chave coloridas. `base` são as tags
+    que devolvem o estilo do texto depois de cada palavra marcada."""
+    kw = {int(i) for i in t.get("kw_idx") or []}
+    kwc = _ass_color(t.get("kw_color") or "#39E75F")
+    hl = _ass_color(t.get("hl") or "#FFE600")
+    pop = int(t.get("hl_pop") or 110)
+    mode = t.get("hl_mode") or "color"
+    out_lines, k = [], 0
+    for line in lines:
+        parts = []
+        for word in line:
+            if k == active and mode == "box":
+                parts.append(f"{{\\3c{hl}\\c&H00111111&\\bord16\\fscx{pop}\\fscy{pop}}}{word}{{{base}}}")
+            elif k == active and mode == "color":
+                parts.append(f"{{\\c{hl}\\fscx{pop}\\fscy{pop}}}{word}{{{base}}}")
+            elif k in kw:
+                parts.append(f"{{\\c{kwc}}}{word}{{\\c{base_color}}}")
+            else:
+                parts.append(word)
+            k += 1
+        out_lines.append(" ".join(parts))
+    return "\\N".join(out_lines)
+
+
 def text_ass(p: dict) -> str:
     W, H = p["canvas"]["w"], p["canvas"]["h"]
     lines = [
@@ -65,30 +110,60 @@ def text_ass(p: dict) -> str:
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     for i, t in enumerate(p["tracks"]["text"]):
-        text = str(t.get("text") or "").replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", "\\N")
+        text = str(t.get("text") or "").replace("\\", "").replace("{", "(").replace("}", ")")
         if not text.strip():
             continue
         x, y = float(t.get("x", 0.5)) * W, float(t.get("y", 0.5)) * H
         start, dur = float(t.get("start", 0)), max(0.1, float(t.get("dur", 3)))
         box = bool(t.get("bg"))
+        color = _ass_color(t.get("color") or "#FFFFFF")
         tags = [f"\\an5\\pos({x:.0f},{y:.0f})", f"\\fn{t.get('font') or 'Arial Black'}", f"\\fs{int(t.get('size') or 80)}",
-                f"\\c{_ass_color(t.get('color') or '#FFFFFF')}",
-                f"\\b{1 if t.get('bold', True) else 0}", f"\\i{1 if t.get('italic') else 0}"]
+                f"\\c{color}", f"\\b{1 if t.get('bold', True) else 0}", f"\\i{1 if t.get('italic') else 0}"]
         if box:
-            tags.append(f"\\3c{_ass_color(t['bg'])}\\bord14")
+            outline = f"\\3c{_ass_color(t['bg'])}\\bord14"
         else:
-            tags.append(f"\\3c{_ass_color(t.get('stroke') or '#000000')}\\bord{float(t.get('stroke_w', 5)):.1f}")
+            outline = f"\\3c{_ass_color(t.get('stroke') or '#000000')}\\bord{float(t.get('stroke_w', 5)):.1f}"
+        tags.append(outline)
+        base = f"\\c{color}{outline}\\fscx100\\fscy100"
         anim = t.get("anim") or "none"
+        fade_in, fade_out, intro = 0, 0, ""
         if anim == "fade":
-            tags.append("\\fad(250,250)")
+            fade_in, fade_out = 250, 250
         elif anim == "pop":
-            tags.append("\\fscx30\\fscy30\\t(0,160,\\fscx112\\fscy112)\\t(160,260,\\fscx100\\fscy100)\\fad(0,180)")
+            fade_out = 180
+            intro = "\\fscx30\\fscy30\\t(0,160,\\fscx112\\fscy112)\\t(160,260,\\fscx100\\fscy100)"
         elif anim == "slide":
-            tags.append(f"\\move({x:.0f},{y + H * 0.06:.0f},{x:.0f},{y:.0f},0,260)\\fad(160,160)")
+            fade_in, fade_out = 160, 160
+            intro = f"\\move({x:.0f},{y + H * 0.06:.0f},{x:.0f},{y:.0f},0,260)"
         elif anim == "zoom":
-            tags.append("\\fscx160\\fscy160\\t(0,300,\\fscx100\\fscy100)\\fad(120,180)")
-        lines.append(f"Dialogue: {i},{_ts(start)},{_ts(start + dur)},{'Box' if box else 'Out'},,0,0,0,,"
-                     f"{{{''.join(tags)}}}{text}")
+            fade_in, fade_out = 120, 180
+            intro = "\\fscx160\\fscy160\\t(0,300,\\fscx100\\fscy100)"
+        style = "Box" if box else "Out"
+        words = _tokens(text)
+        count = sum(len(line) for line in words)
+        karaoke = bool(t.get("words")) and (t.get("hl_mode") or "color") in ("color", "box") and count > 0
+        if not karaoke:
+            body = _rich(t, words, None, base, color) if t.get("kw_idx") else text.replace("\n", "\\N")
+            fx = f"\\fad({fade_in},{fade_out})" if fade_in or fade_out else ""
+            lines.append(f"Dialogue: {i},{_ts(start)},{_ts(start + dur)},{style},,0,0,0,,"
+                         f"{{{''.join(tags)}{intro}{fx}}}{body}")
+            continue
+        # destaque da palavra falada: um evento por palavra, como as legendas do Cortaí
+        spans = word_spans(t, count)
+        for k, (a, b) in enumerate(spans):
+            if k == 0:
+                a = 0.0  # o texto aparece inteiro desde o começo
+            if k + 1 < len(spans):
+                b = max(b, spans[k + 1][0])  # sem buraco entre uma palavra e a próxima
+            else:
+                b = dur
+            if b - a < 0.02:
+                continue
+            first, last = k == 0, k == len(spans) - 1
+            fi, fo = (fade_in if first else 0), (fade_out if last else 0)
+            fx = f"\\fad({fi},{fo})" if fi or fo else ""
+            lines.append(f"Dialogue: {i},{_ts(start + a)},{_ts(start + b)},{style},,0,0,0,,"
+                         f"{{{''.join(tags)}{intro if first else ''}{fx}}}{_rich(t, words, k, base, color)}")
     return "\n".join(lines) + "\n"
 
 

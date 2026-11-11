@@ -8,7 +8,33 @@ import cv2
 import numpy as np
 
 SAMPLE_FPS = 5
-_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+
+def _load_cascade() -> "cv2.CascadeClassifier":
+    """O OpenCV no Windows não abre caminhos com acento (ex.: D:\\EdiçãoClaude). Copia o XML do
+    detector para a pasta temporária, que costuma ter caminho sem acento, antes de carregar."""
+    import os
+    import shutil
+    import tempfile
+    xml = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+    cascade = cv2.CascadeClassifier(xml)
+    if not cascade.empty():
+        return cascade
+    for folder in (tempfile.gettempdir(), os.environ.get("PUBLIC", ""), "C:\\"):
+        if not folder:
+            continue
+        try:
+            dst = os.path.join(folder, "cortai_haarcascade_frontalface_default.xml")
+            shutil.copyfile(xml, dst)
+            cascade = cv2.CascadeClassifier(dst)
+            if not cascade.empty():
+                return cascade
+        except OSError:
+            pass
+    return cascade  # vazio: face_positions devolve "sem rosto" em vez de travar o programa
+
+
+_cascade = _load_cascade()
 
 
 def face_positions(src: Path, start: float, dur: float, src_w: int, src_h: int) -> list[tuple[float, float, float] | None]:
@@ -27,6 +53,8 @@ def face_positions(src: Path, start: float, dur: float, src_w: int, src_h: int) 
     frames = np.frombuffer(data[: n * size], np.uint8).reshape(n, sh, sw)
     min_face = max(16, int(sh * 0.08))
     out: list[tuple[float, float, float] | None] = []
+    if _cascade.empty():
+        return [None] * n
     for frame in frames:
         faces = _cascade.detectMultiScale(frame, scaleFactor=1.1, minNeighbors=6, minSize=(min_face, min_face))
         if len(faces):
