@@ -99,6 +99,43 @@ _lock = threading.Lock()
 FIELDS = ["job", "n", "titulo", "formula", "caracteres", "views", "visualizado_pct", "observacao"]
 
 
+# ------------------------------------------------------------------ títulos novos para clipes prontos
+
+RETITLE_SYSTEM = """Você é o editor de títulos de um canal de cortes de lives de jogos. Os clipes abaixo já estão \
+cortados e revisados: para cada um você recebe o que se vê na tela, o que prende no começo, por que funciona, \
+a fala do trecho e o título atual. Escreva títulos novos seguindo as regras de título, e um `post` novo: \
+descrição curta no idioma do vídeo, tom de zoeira, uma linha que amplia a curiosidade sem repetir o título \
+(sem "kkkk"), terminando com 3 a 5 hashtags (jogo + nicho). Mantenha as hashtags fixas do canal que aparecerem \
+no post atual (ex.: o @ ou nome do streamer)."""
+
+RETITLE_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["clips"],
+    "properties": {"clips": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False, "required": ["n", "title_options", "title", "post"],
+        "properties": {
+            "n": {"type": "integer", "description": "Número do clipe"},
+            "title_options": TITLE_OPTIONS_FIELD,
+            "title": {"type": "string"},
+            "post": {"type": "string"},
+        },
+    }}},
+}
+
+
+def retitle_prompt(clips: list[dict], speech: dict[int, str]) -> str:
+    parts = []
+    for c in clips:
+        parts.append(f"## Clipe {c['n']} ({c['end'] - c['start']:.0f}s)")
+        for label, key in (("Título atual", "title"), ("Na tela", "visual"), ("Gancho", "hook"),
+                           ("Por que funciona", "reason"), ("Post atual", "post")):
+            if c.get(key):
+                parts.append(f"{label}: {c[key]}")
+        parts.append(f"Fala do trecho: {speech.get(c['n']) or '(sem fala)'}")
+        parts.append("")
+    parts.append('Responda somente com JSON {"clips": [...]} com um item por clipe, mantendo o número em `n`.')
+    return "\n".join(parts)
+
+
 # ------------------------------------------------------------------ validação e escolha
 
 def problems(title: str, compilation: bool = False) -> list[str]:

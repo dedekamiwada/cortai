@@ -25,6 +25,8 @@ Clone local do OpusClip: você joga um vídeo longo (live, podcast, VOD) e receb
 
 As regras de título ficam em `cortai/titles.py` (vêm da skill `titulos-virais-clips`, feita a partir de ~400 Shorts de jogos com e sem views). Na revisão visual o Claude devolve 5 opções de fórmulas diferentes (`title_options`, com fórmula F1–F10 e nota). O código descarta as que quebram regras duras (mais de 60 caracteres, hashtag, "kkkk", "!!!", mais de 1 emoji, "clipe/corte/gameplay/melhores momentos" fora de compilação) e fica com a de maior nota. As outras opções aparecem como sugestões no campo de título do editor.
 
+Para projetos que já estão prontos, o botão **🏷 Gerar títulos** pede ao Claude só títulos e posts novos, usando a descrição da revisão e a fala de cada clipe, sem refazer os cortes. O título anterior continua como sugestão no editor; clipes com o título gravado no vídeo são renderizados de novo.
+
 Aprendizado: cada título vai para `jobs/_titulos/titulos.csv` (abre no Excel). Depois de postar, preencha a coluna `views` (aceita `12000`, `12.000`, `12k`, `1,2 mil`). Quando houver pelo menos 2 fórmulas com 3 posts medidos ou mais, o prompt passa a dizer ao Claude quais fórmulas rendem mais no seu canal. Feche o CSV no Excel antes de rodar um job, senão a gravação daquele job é pulada.
 
 ## Pós-edição (drama num clipe pronto)

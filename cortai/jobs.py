@@ -324,6 +324,66 @@ def _visual_review(job_id: str, backend: str, candidates, transcript, events, st
     return out
 
 
+def retitle(job_id: str) -> int:
+    """Gera títulos novos para os clipes já prontos, sem refazer os cortes."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    if job["status"] not in ("done", "error") or not job["clips"]:
+        raise ValueError("espere o processamento terminar")
+    backend = picker.resolve_backend(job.get("backend") or job["options"].get("backend", "auto"))
+    if backend == "manual":
+        raise ValueError("gerar títulos precisa do Claude Code logado ou de ANTHROPIC_API_KEY")
+    update(job_id, status="titling", progress=0.0, error=None, message="Claude escrevendo títulos…")
+    _worker.submit(_guard, job_id, _retitle, backend)
+    return len(job["clips"])
+
+
+def _retitle(job_id: str, backend: str) -> None:
+    job = get(job_id)
+    words = _words(job_id)
+    speech = {c["n"]: " ".join(w["w"] for w in words if c["start"] <= w["s"] < c["end"]) for c in job["clips"]}
+    prompt = titles.retitle_prompt(job["clips"], speech)
+    raw = picker.ask(backend, titles.RETITLE_SYSTEM + titles.guide(JOBS_DIR), prompt, titles.RETITLE_SCHEMA)
+    (_dir(job_id) / "titles.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    changed, to_render = [], []
+    for item in raw.get("clips", []):
+        job = get(job_id)
+        idx = next((i for i, c in enumerate(job["clips"]) if c["n"] == item.get("n")), None)
+        if idx is None:
+            continue
+        clip = job["clips"][idx]
+        picked = titles.choose(item.get("title_options"), item.get("title", ""))
+        if not picked["title"]:
+            continue
+        old = clip["title"]
+        if old and all(o["title"] != old for o in picked["title_options"]):
+            # o título anterior continua disponível como sugestão no editor
+            picked["title_options"].append({"title": old, "formula": titles.MANUAL, "score": 0, "problems": []})
+        fields = dict(picked)
+        if (item.get("post") or "").strip():
+            fields["post"] = item["post"].strip()
+        overrides = dict(clip.get("overrides", {}))
+        if "title_text" in overrides:
+            overrides["title_text"] = picked["title"]
+            fields["overrides"] = overrides
+        opts = {**job["options"], **overrides}
+        if opts.get("title_overlay") and picked["title"] != old:
+            fields["status"] = "pending"  # o título está gravado no vídeo: precisa renderizar de novo
+            to_render.append(idx)
+        _set_clip(job_id, idx, **fields)
+        changed.append({**clip, **fields})
+    titles.record(JOBS_DIR, job_id, changed)
+
+    for i, idx in enumerate(to_render):
+        update(job_id, status="rendering", progress=i / len(to_render),
+               message=f"Renderizando com o título novo {i + 1} de {len(to_render)}…")
+        _render_one(job_id, idx, words)
+    update(job_id, status="done", progress=1.0,
+           message=f"Títulos novos em {len(changed)} clipes" + (f", {len(to_render)} renderizados de novo" if to_render else ""))
+
+
 def submit_manual(job_id: str, raw: str) -> None:
     job = get(job_id)
     if not job or job["status"] not in ("waiting_manual", "done", "error"):

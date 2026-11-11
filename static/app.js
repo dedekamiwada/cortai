@@ -7,12 +7,13 @@ const STAGES = {
   transcribing: "Transcrevendo",
   selecting: "Claude escolhendo candidatos",
   reviewing: "Claude assistindo aos candidatos",
+  titling: "Claude escrevendo títulos",
   waiting_manual: "Esperando sua resposta do Claude",
   rendering: "Renderizando",
   done: "Pronto",
   error: "Erro",
 };
-const BUSY = new Set(["queued", "downloading", "transcribing", "selecting", "reviewing", "rendering"]);
+const BUSY = new Set(["queued", "downloading", "transcribing", "selecting", "reviewing", "titling", "rendering"]);
 const LAYOUTS = { face: "seguindo rosto", fit: "vídeo inteiro", split: "tela dividida", manual: "posição fixa" };
 const SCORE_NAMES = { hook: "Gancho", flow: "Ritmo", value: "Graça", trend: "Compartilhável" };
 // mesmos limites de agrupamento de captions.py, para a prévia do editor
@@ -283,7 +284,7 @@ function renderJob(job) {
   $("#job-title").textContent = job.name;
   const st = $("#job-status");
   const busy = BUSY.has(job.status);
-  const indeterminate = ["selecting", "downloading", "queued"].includes(job.status) ||
+  const indeterminate = ["selecting", "downloading", "queued", "titling"].includes(job.status) ||
     (job.status === "reviewing" && job.message.startsWith("Claude"));
   st.innerHTML = `<div class="msg"></div>${busy ? `<div class="bar ${indeterminate ? "indeterminate" : ""}"><i></i></div>` : ""}
     ${job.error ? `<div class="err"></div>` : ""}`;
@@ -480,6 +481,17 @@ $("#reselect-btn").onclick = async () => {
   try {
     await postJSON(`/api/jobs/${currentJob.id}/reselect`, { instructions: $("#reselect-instructions").value });
     $("#clips").replaceChildren();
+    openJob(currentJob.id);
+  } catch (ex) {
+    alert(ex.message);
+  }
+};
+$("#retitle-btn").onclick = async () => {
+  const n = currentJob.clips.length;
+  if (!confirm(`Gerar títulos e posts novos para os ${n} clipes? O título atual continua como sugestão no editor. ` +
+    "Clipes com o título gravado no vídeo são renderizados de novo.")) return;
+  try {
+    await postJSON(`/api/jobs/${currentJob.id}/retitle`, {});
     openJob(currentJob.id);
   } catch (ex) {
     alert(ex.message);

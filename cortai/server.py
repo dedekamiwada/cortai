@@ -249,6 +249,16 @@ async def reselect(job_id: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/jobs/{job_id}/retitle")
+def retitle(job_id: str):
+    _job_or_404(job_id)
+    try:
+        count = jobs.retitle(job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "clips": count}
+
+
 @app.post("/api/jobs/{job_id}/clips/{n}")
 async def rerender(job_id: str, n: int, request: Request):
     _job_or_404(job_id)
