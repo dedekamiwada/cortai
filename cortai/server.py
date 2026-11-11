@@ -11,7 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import captions, fx, jobs, paths, picker, studio, studio_render, styles
+from . import autocaptions, captions, fx, jobs, paths, picker, studio, studio_render, styles
 
 app = FastAPI(title="Cortaí")
 jobs.load_existing()
@@ -364,6 +364,26 @@ async def studio_add_asset(pid: str, request: Request):
         return studio.add_asset(pid, path)
     except FileNotFoundError as exc:
         raise HTTPException(400, str(exc))
+
+
+@app.post("/api/studio/projects/{pid}/autocaptions")
+async def studio_autocaptions(pid: str, request: Request):
+    """Legenda automática: transcreve a faixa principal em segundo plano (ver autocaptions.py)."""
+    _project_or_404(pid)
+    try:
+        autocaptions.start(pid, await request.json())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.post("/api/studio/projects/{pid}/autocaptions/ack")
+def studio_autocaptions_ack(pid: str):
+    """O editor já colocou as legendas na timeline: limpa o resultado guardado."""
+    _project_or_404(pid)
+    studio.mutate(pid, lambda p: p.__setitem__("captions_job", {**(p.get("captions_job") or {}), "items": None,
+                                                                 "status": "applied"}))
+    return {"ok": True}
 
 
 @app.get("/api/studio/fx")

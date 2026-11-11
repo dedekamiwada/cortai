@@ -1,12 +1,13 @@
 """Exportação do Estúdio: transforma o projeto num único filter_complex do ffmpeg."""
 from __future__ import annotations
 
+import math
 import subprocess
 import time
 import traceback
 from pathlib import Path
 
-from . import fx, studio
+from . import fx, keys, studio
 
 XFADE = {  # nome na interface -> transição do ffmpeg xfade
     "fade": "fade", "dissolve": "dissolve", "fadeblack": "fadeblack", "fadewhite": "fadewhite",
@@ -117,7 +118,8 @@ def text_ass(p: dict) -> str:
         start, dur = float(t.get("start", 0)), max(0.1, float(t.get("dur", 3)))
         box = bool(t.get("bg"))
         color = _ass_color(t.get("color") or "#FFFFFF")
-        tags = [f"\\an5\\pos({x:.0f},{y:.0f})", f"\\fn{t.get('font') or 'Arial Black'}", f"\\fs{int(t.get('size') or 80)}",
+        size = int(t.get("size") or 80)
+        tags = [f"\\fn{t.get('font') or 'Arial Black'}",
                 f"\\c{color}", f"\\b{1 if t.get('bold', True) else 0}", f"\\i{1 if t.get('italic') else 0}"]
         if box:
             outline = f"\\3c{_ass_color(t['bg'])}\\bord14"
@@ -146,28 +148,54 @@ def text_ass(p: dict) -> str:
         words = _tokens(text)
         count = sum(len(line) for line in words)
         karaoke = bool(t.get("words")) and (t.get("hl_mode") or "color") in ("color", "box") and count > 0
+        segs: list[tuple[float, float, str, bool, bool]] = []  # (início, fim, texto, primeiro, último)
         if not karaoke:
             body = _rich(t, words, None, base, color) if t.get("kw_idx") else text.replace("\n", "\\N")
-            fad = f"\\fad({fade_in},{fade_out})" if fade_in or fade_out else ""
-            lines.append(f"Dialogue: {i},{_ts(start)},{_ts(start + dur)},{style},,0,0,0,,"
-                         f"{{{''.join(tags)}{intro}{fad}}}{body}")
-            continue
-        # destaque da palavra falada: um evento por palavra, como as legendas do Cortaí
-        spans = word_spans(t, count)
-        for k, (a, b) in enumerate(spans):
-            if k == 0:
-                a = 0.0  # o texto aparece inteiro desde o começo
-            if k + 1 < len(spans):
-                b = max(b, spans[k + 1][0])  # sem buraco entre uma palavra e a próxima
-            else:
-                b = dur
-            if b - a < 0.02:
-                continue
-            first, last = k == 0, k == len(spans) - 1
-            fi, fo = (fade_in if first else 0), (fade_out if last else 0)
-            fad = f"\\fad({fi},{fo})" if fi or fo else ""
-            lines.append(f"Dialogue: {i},{_ts(start + a)},{_ts(start + b)},{style},,0,0,0,,"
-                         f"{{{''.join(tags)}{intro if first else ''}{fad}}}{_rich(t, words, k, base, color)}")
+            segs.append((0.0, dur, body, True, True))
+        else:  # destaque da palavra falada: um evento por palavra, como as legendas do Cortaí
+            spans = word_spans(t, count)
+            for k, (a, b) in enumerate(spans):
+                if k == 0:
+                    a = 0.0  # o texto aparece inteiro desde o começo
+                b = max(b, spans[k + 1][0]) if k + 1 < len(spans) else dur  # sem buraco entre palavras
+                if b - a >= 0.02:
+                    segs.append((a, b, _rich(t, words, k, base, color), k == 0, k == len(spans) - 1))
+        # keyframes (posição, tamanho, opacidade): cada evento é dividido nos tempos das chaves e
+        # anda em linha reta entre elas (\move, \t); na curva suave, em 6 passos por trecho
+        kprops = ("x", "y", "scale", "opacity")
+        kt = keys.times(t, kprops)
+        moving = keys.animated(t, "x") or keys.animated(t, "y")
+        x0b, y0b = float(t.get("x", 0.5)), float(t.get("y", 0.5))
+        sc0, op0 = float(t.get("scale", 1) or 1), float(t.get("opacity", 1) if t.get("opacity") is not None else 1)
+        styled = bool(kt) or abs(sc0 - 1) > 1e-3 or op0 < 0.999
+        for a, b, body, first, last in segs:
+            cuts = {a, b, *(k for k in kt if a < k < b)}
+            if kt and keys.smooth(t):
+                inner = sorted(c for c in cuts if kt[0] <= c <= kt[-1])
+                for c0, c1 in zip(inner, inner[1:]):
+                    cuts.update(c0 + (c1 - c0) * q / 6 for q in range(1, 6))
+            cuts = sorted(cuts)
+            for j, (c0, c1) in enumerate(zip(cuts, cuts[1:])):
+                if c1 - c0 < 0.01:
+                    continue
+                pf, pl = first and j == 0, last and c1 >= cuts[-1] - 1e-6
+                fi, fo = (fade_in if pf else 0), (fade_out if pl else 0)
+                fad = f"\\fad({fi},{fo})" if fi or fo else ""
+                if styled:
+                    xa, xb = keys.value_at(t, "x", c0, x0b) * W, keys.value_at(t, "x", c1, x0b) * W
+                    ya, yb = keys.value_at(t, "y", c0, y0b) * H, keys.value_at(t, "y", c1, y0b) * H
+                    pos = (f"\\move({xa:.0f},{ya:.0f},{xb:.0f},{yb:.0f})" if moving
+                           else f"\\pos({xa:.0f},{ya:.0f})")
+                    sa, sb = keys.value_at(t, "scale", c0, sc0), keys.value_at(t, "scale", c1, sc0)
+                    fs = f"\\fs{size * sa:.1f}" + (f"\\t(\\fs{size * sb:.1f})" if abs(sb - sa) > 1e-3 else "")
+                    oa, ob = (max(0.0, min(1.0, keys.value_at(t, "opacity", c, op0))) for c in (c0, c1))
+                    al = ("" if oa > 0.999 and ob > 0.999 else f"\\alpha&H{round((1 - oa) * 255):02X}&") + (
+                        f"\\t(\\alpha&H{round((1 - ob) * 255):02X}&)" if abs(ob - oa) > 1e-3 else "")
+                else:
+                    pos, fs, al = f"\\pos({x:.0f},{y:.0f})", f"\\fs{size}", ""
+                lead = intro if pf and not (moving and anim == "slide") else ""
+                lines.append(f"Dialogue: {i},{_ts(start + c0)},{_ts(start + c1)},{style},,0,0,0,,"
+                             f"{{\\an5{pos}{''.join(tags)}{fs}{al}{lead}{fad}}}{body}")
     return "\n".join(lines) + "\n"
 
 
@@ -194,7 +222,8 @@ def _angle(it: dict) -> float:
     return 0.0 if abs(a) < 0.05 else a
 
 
-def _fit_chain(label_in: str, label_out: str, it: dict, W: int, H: int, bg: str) -> str:
+def _fit_chain(label_in: str, label_out: str, it: dict, W: int, H: int, bg: str, fps: int = 30,
+               length: float = 3600.0) -> str:
     fit = it.get("fit") or "fill"
     z = max(1.0, float(it.get("zoom") or 1.0))
     if fit == "fit":
@@ -208,6 +237,16 @@ def _fit_chain(label_in: str, label_out: str, it: dict, W: int, H: int, bg: str)
                 f"[{label_out}bg][{label_out}fg]overlay=(W-w)/2:(H-h)/2[{label_out}]")
     px = max(-1.0, min(1.0, float(it.get("pan_x") or 0)))
     py = max(-1.0, min(1.0, float(it.get("pan_y") or 0)))
+    if any(keys.animated(it, k) for k in ("zoom", "pan_x", "pan_y")):
+        # keyframes: escala a cada quadro e posiciona num quadro fixo (o crop não aceita tamanho variável);
+        # dá o mesmo recorte do caso parado: deslocamento (iw-W)/2*(1+pan)
+        Z = f"max(1,{keys.expr(it, 'zoom', z)})"
+        PX, PY = f"clip({keys.expr(it, 'pan_x', px)},-1,1)", f"clip({keys.expr(it, 'pan_y', py)},-1,1)"
+        return (f"[{label_in}]scale=w='2*trunc({W}*{Z}/2)':h='2*trunc({H}*{Z}/2)':eval=frame:"
+                f"force_original_aspect_ratio=increase[{label_out}z];"
+                f"color=c={bg}:s={W}x{H}:r={fps}:d={length + 1:.3f}[{label_out}c];"
+                f"[{label_out}c][{label_out}z]overlay=x='-(overlay_w-{W})/2*(1+{PX})':"
+                f"y='-(overlay_h-{H})/2*(1+{PY})':eval=frame:shortest=1,format=yuv420p[{label_out}]")
     return (f"[{label_in}]scale={_even(W * z)}:{_even(H * z)}:force_original_aspect_ratio=increase,"
             f"crop={W}:{H}:(iw-{W})/2*(1+{px:.3f}):(ih-{H})/2*(1+{py:.3f})[{label_out}]")
 
@@ -251,7 +290,7 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         idx = add_input(a, float(it["in"]), src_len)
         crop = _crop(it)
         chain = f"[{idx}:v]setpts=(PTS-STARTPTS)/{speed:.4f},fps={fps},format=yuv420p{',' + crop if crop else ''}[r{i}];"
-        chain += _fit_chain(f"r{i}", f"f{i}", it, W, H, bgc) + ";"
+        chain += _fit_chain(f"r{i}", f"f{i}", it, W, H, bgc, fps, length) + ";"
         b, c, s = float(it.get("brightness") or 0), float(it.get("contrast") or 1), float(it.get("saturation") or 1)
         eq = f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}" \
             if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3 else "null"
@@ -273,8 +312,10 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         graph.append(chain)
 
         vol = 0.0 if it.get("mute") else float(it.get("volume", 1.0))
-        if a.get("has_audio") and vol > 0:
-            afx = ["asetpts=PTS-STARTPTS", _atempo(speed), f"volume={vol:.3f}", *fx.voice_chain(it)]
+        kvol = not it.get("mute") and keys.animated(it, "volume")
+        if a.get("has_audio") and (vol > 0 or kvol):
+            volf = f"volume='max(0,{keys.expr(it, 'volume', vol)})':eval=frame" if kvol else f"volume={vol:.3f}"
+            afx = ["asetpts=PTS-STARTPTS", _atempo(speed), volf, *fx.voice_chain(it)]
             if fi > 0:
                 afx.append(f"afade=t=in:st=0:d={fi:.2f}")
             if fo > 0:
@@ -334,32 +375,59 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         if start >= total:
             continue
         idx = add_input(a, float(it["in"]), length)
-        ow = _even(W * max(0.05, min(2.0, float(it.get("scale") or 0.4))))
+        sc = max(0.05, min(2.0, float(it.get("scale") or 0.4)))
+        ow = _even(W * sc)
         op = max(0.0, min(1.0, float(it.get("opacity", 1.0))))
         crop = _crop(it)
-        ofx = [f"setpts=PTS-STARTPTS+{start:.3f}/TB", *([crop] if crop else []), f"scale={ow}:-2", "format=rgba"]
+        if keys.animated(it, "scale"):
+            # tamanho animado: escala a cada quadro e centraliza numa caixa fixa do maior tamanho,
+            # para a sobreposição (e o giro) terem sempre o mesmo quadro
+            smax = max(0.05, min(2.0, keys.extreme(it, "scale", sc)))
+            l_, r_, t_, b_ = (max(0.0, min(0.45, float(it.get(k) or 0))) for k in ("crop_l", "crop_r", "crop_t", "crop_b"))
+            aw = max(1.0, float(a.get("width") or 16) * (1 - l_ - r_))
+            ah = max(1.0, float(a.get("height") or 9) * (1 - t_ - b_))
+            bw, bh = _even(W * smax), _even(W * smax * ah / aw) + 2
+            S = f"clip({keys.expr(it, 'scale', sc, offset=start)},0.02,{smax:.4f})"
+            sizing = [f"scale=w='2*trunc({W}*{S}/2)':h=-2:eval=frame", "format=rgba",
+                      f"pad={bw}:{bh}:(ow-iw)/2:(oh-ih)/2:color=black@0:eval=frame"]
+        else:
+            bw, bh = ow, None
+            sizing = [f"scale={ow}:-2", "format=rgba"]
+        ofx = [f"setpts=PTS-STARTPTS+{start:.3f}/TB", *([crop] if crop else []), *sizing]
         b, c, s = float(it.get("brightness") or 0), float(it.get("contrast") or 1), float(it.get("saturation") or 1)
+        pre = []  # cor e recorte antes de mudar o tamanho
         if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3:
-            ofx.insert(len(ofx) - 1, f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
+            pre.append(f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
         key = fx.key_filter(it)
         if key:  # recorte de fundo antes de mexer na cor, para comparar com a cor original
-            ofx.insert(len(ofx) - 1, key)
+            pre.append(key)
         m = fx.look_matrix(it)
         if m:
             fx.write_cube(m, out_dir / f"look-o{j}.cube")
-            ofx.insert(len(ofx) - 1, f"lut3d=file=look-o{j}.cube:interp=trilinear")
+            pre.append(f"lut3d=file=look-o{j}.cube:interp=trilinear")
+        at = ofx.index(sizing[0])
+        ofx[at:at] = pre
         ofx += _flips(it)
         ang = _angle(it)
-        if ang:  # o quadro cresce para caber a imagem girada; o centro continua no mesmo ponto
+        if keys.animated(it, "rotate"):
+            box = _even(math.hypot(bw, bh if bh else bw * 2)) + 2
+            R = keys.expr(it, "rotate", ang, offset=start)
+            ofx.append(f"rotate=a='({R})*PI/180':ow={box}:oh={box}:c=none")
+        elif ang:  # o quadro cresce para caber a imagem girada; o centro continua no mesmo ponto
             ofx.append(f"rotate={ang:.3f}*PI/180:ow=rotw({ang:.3f}*PI/180):oh=roth({ang:.3f}*PI/180):c=none")
-        if op < 0.999:
+        if keys.animated(it, "opacity"):
+            OP = keys.expr(it, "opacity", op, tvar="T", offset=start)
+            ofx.append(f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*clip({OP},0,1)'")
+        elif op < 0.999:
             ofx.append(f"colorchannelmixer=aa={op:.3f}")
         graph.append(f"[{idx}:v]{','.join(ofx)}[o{j}]")
-        x, y = float(it.get("x", 0.5)) * W, float(it.get("y", 0.5)) * H
+        x, y = float(it.get("x", 0.5)), float(it.get("y", 0.5))
         shake = fx.effect(it, "shake")
         xs = f"+{W * 0.03:.1f}*{fx.shake_expr('x', shake)}" if shake else ""
         ys = f"+{W * 0.03:.1f}*{fx.shake_expr('y', shake)}" if shake else ""
-        place = (f"x='{x:.0f}-w/2{xs}':y='{y:.0f}-h/2{ys}':eof_action=pass:"
+        X = keys.expr(it, "x", x, offset=start, scale=W)
+        Y = keys.expr(it, "y", y, offset=start, scale=H)
+        place = (f"x='{X}-w/2{xs}':y='{Y}-h/2{ys}':eof_action=pass:"
                  f"enable='between(t,{start:.3f},{start + length:.3f})'")
         bm = fx.blend_mode(it)
         if bm:
@@ -374,10 +442,12 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
             graph.append(f"[{cur_v}][o{j}]overlay={place}[ov{j}]")
         cur_v = f"ov{j}"
         vol = 0.0 if it.get("mute") else float(it.get("volume", 0.0))
-        if a.get("has_audio") and vol > 0:
+        kvol = not it.get("mute") and keys.animated(it, "volume")
+        if a.get("has_audio") and (vol > 0 or kvol):
             ms = int(start * 1000)
             vfx = "".join(f"{f}," for f in fx.voice_chain(it))
-            graph.append(f"[{idx}:a]asetpts=PTS-STARTPTS,volume={vol:.3f},{vfx}{AUDIO_FMT},adelay={ms}|{ms}[om{j}]")
+            volf = f"volume='max(0,{keys.expr(it, 'volume', vol)})':eval=frame" if kvol else f"volume={vol:.3f}"
+            graph.append(f"[{idx}:a]asetpts=PTS-STARTPTS,{volf},{vfx}{AUDIO_FMT},adelay={ms}|{ms}[om{j}]")
             mixes.append(f"om{j}")
 
     # ---- faixa de áudio (música, efeitos, narração)
@@ -392,7 +462,10 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         src_len = max(0.1, float(it["out"]) - float(it["in"]))
         length = src_len / speed
         idx = add_input(a, float(it["in"]), src_len)
-        afx = ["asetpts=PTS-STARTPTS", _atempo(speed), f"volume={float(it.get('volume', 1.0)):.3f}", *fx.voice_chain(it)]
+        avol = float(it.get("volume", 1.0))
+        volf = (f"volume='max(0,{keys.expr(it, 'volume', avol)})':eval=frame" if keys.animated(it, "volume")
+                else f"volume={avol:.3f}")
+        afx = ["asetpts=PTS-STARTPTS", _atempo(speed), volf, *fx.voice_chain(it)]
         fi, fo = float(it.get("fade_in") or 0), float(it.get("fade_out") or 0)
         if fi > 0:
             afx.append(f"afade=t=in:st=0:d={fi:.2f}")

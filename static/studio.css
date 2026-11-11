@@ -143,3 +143,17 @@ body.studio-editing { overflow: hidden; }
 .look-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px; }
 .look-grid button { padding: 6px 4px; font-size: 12px; }
 .look-grid button.on { color: var(--accent); border-color: var(--accent); }
+.insp-row.kf-row { grid-template-columns: 96px 1fr 46px 24px; }
+.kfb { padding: 0; width: 24px; height: 24px; border-radius: 6px; font-size: 12px; line-height: 1; color: var(--muted);
+  background: transparent; border: 1px solid var(--line); cursor: pointer; }
+.kfb.has { color: #f5c542; border-color: #6b5a22; }
+.kfb.on { color: #111; background: #f5c542; border-color: #f5c542; }
+.tl-item .kfd { position: absolute; bottom: 3px; width: 8px; height: 8px; margin-left: -4px; background: #f5c542;
+  transform: rotate(45deg); border: 1px solid #111; pointer-events: none; z-index: 3; }
+.autocap { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.autocap h4 { margin: 0; }
+.autocap-row { display: flex; gap: 6px; align-items: center; }
+.autocap-row select { flex: 1; }
+.autocap-row input[type=color] { width: 40px; height: 32px; padding: 2px; }
+.autocap .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+.autocap .bar i { display: block; height: 100%; background: var(--accent); }

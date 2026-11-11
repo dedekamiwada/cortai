@@ -132,6 +132,8 @@ async function openProject(id) {
   afterChange(false);
   pollAssets();
   if (P.export?.status === "running") openExport();
+  renderAutocap();
+  if (P.captions_job?.status === "running" || P.captions_job?.status === "done") pollAutocap();
 }
 
 function pollAssets() {
@@ -434,14 +436,16 @@ function syncStage(seek = false) {
     media.style.zIndex = 2 + i;
     const fit = it.fit || "fill";
     media.style.objectFit = fit === "fill" ? "cover" : "contain";
-    media.style.objectPosition = `${50 + 50 * (it.pan_x || 0)}% ${50 + 50 * (it.pan_y || 0)}%`;
+    const lt = T - e.start;
+    const panX = kv(it, "pan_x", lt, it.pan_x || 0), panY = kv(it, "pan_y", lt, it.pan_y || 0);
+    media.style.objectPosition = `${50 + 50 * panX}% ${50 + 50 * panY}%`;
     media.style.objectViewBox = cropBox(it);
     // o zoom amplia a partir do ponto da posição (como o recorte da exportação); espelhar e girar
     // valem sobre o quadro já encaixado, em volta do centro
     media.style.transformOrigin = "50% 50%";
-    const z = fit === "fill" ? Math.max(1, it.zoom || 1) : 1;
+    const z = fit === "fill" ? Math.max(1, kv(it, "zoom", lt, it.zoom || 1)) : 1;
     const mw = media.clientWidth, mh = media.clientHeight;
-    let tx = ((1 - z) * (it.pan_x || 0) * mw) / 2, ty = ((1 - z) * (it.pan_y || 0) * mh) / 2;
+    let tx = ((1 - z) * panX * mw) / 2, ty = ((1 - z) * panY * mh) / 2;
     const zoomT = z > 1 ? `translate(${tx}px, ${ty}px) scale(${z})` : "";
     // tremor: amplia 8% e move o recorte (mesma fórmula do crop da exportação)
     const sh = fxv(it, "shake");
@@ -486,7 +490,7 @@ function syncStage(seek = false) {
     }
     if (media.tagName === "VIDEO") {
       syncMedia(media, it.in + (T - e.start) * (it.speed || 1), it.speed || 1, seek,
-        it.mute ? 0 : (it.volume ?? 1) * (opacity < 1 ? opacity : 1));
+        it.mute ? 0 : kv(it, "volume", lt, it.volume ?? 1) * (opacity < 1 ? opacity : 1));
     }
   });
 
@@ -497,16 +501,17 @@ function syncStage(seek = false) {
     const l = layerFor("overlay", it);
     const [s, en] = spanOf("overlay", it);
     if (!(T >= s && T < en) || assetOf(it).status !== "ready") { hide(l); return; }
+    const ot = T - s;
     Object.assign(l.el.style, {
-      display: "block", left: `${(it.x ?? 0.5) * 100}%`, top: `${(it.y ?? 0.5) * 100}%`,
-      width: `${(it.scale ?? 0.4) * 100}%`, opacity: it.opacity ?? 1, zIndex: 50 + i,
-      transform: `translate(-50%, -50%) ${overlayShake(it, T - s)} ${orient(it)}`,
+      display: "block", left: `${kv(it, "x", ot, it.x ?? 0.5) * 100}%`, top: `${kv(it, "y", ot, it.y ?? 0.5) * 100}%`,
+      width: `${kv(it, "scale", ot, it.scale ?? 0.4) * 100}%`, opacity: clamp(kv(it, "opacity", ot, it.opacity ?? 1), 0, 1), zIndex: 50 + i,
+      transform: `translate(-50%, -50%) ${overlayShake(it, ot)} ${orient({ ...it, rotate: kv(it, "rotate", ot, it.rotate || 0) })}`,
       mixBlendMode: CSS_BLEND[it.blend] || "normal",
     });
     l.media.style.filter = `${cssFilter(it)} ${svgFilter(l, it)}`.replace("none ", "").trim() || "none";
     l.media.style.objectViewBox = cropBox(it);
     l.el.classList.toggle("sel", sel?.id === it.id);
-    if (l.media.tagName === "VIDEO") syncMedia(l.media, it.in + (T - s), 1, seek, it.mute ? 0 : it.volume ?? 0);
+    if (l.media.tagName === "VIDEO") syncMedia(l.media, it.in + (T - s), 1, seek, it.mute ? 0 : kv(it, "volume", ot, it.volume ?? 0));
   });
 
   // ---- textos
@@ -516,14 +521,15 @@ function syncStage(seek = false) {
     const l = layerFor("text", it);
     if (!(T >= it.start && T < it.start + it.dur)) { l.el.style.display = "none"; return; }
     const an = textAnim(it.anim, T - it.start, it.dur);
-    const size = (it.size || 80) * K;
+    const tt = T - it.start;
+    const size = (it.size || 80) * K * kv(it, "scale", tt, it.scale ?? 1);
     const st = l.el.style;
     const html = richText(it, T - it.start);
     if (html === null) { if (l.el._html !== undefined || l.el.textContent !== (it.text || "")) { l.el.textContent = it.text || ""; delete l.el._html; } }
     else if (l.el._html !== html) { l.el.innerHTML = html; l.el._html = html; }
     st.display = "block";
-    st.left = `${(it.x ?? 0.5) * 100}%`;
-    st.top = `${(it.y ?? 0.5) * 100}%`;
+    st.left = `${kv(it, "x", tt, it.x ?? 0.5) * 100}%`;
+    st.top = `${kv(it, "y", tt, it.y ?? 0.5) * 100}%`;
     st.zIndex = 100 + i;
     st.fontFamily = `'${it.font || "Arial Black"}'`;
     st.fontSize = `${size}px`;
@@ -534,7 +540,7 @@ function syncStage(seek = false) {
     st.webkitTextStroke = it.bg ? "0" : `${(it.stroke_w ?? 5) * 2 * K}px ${it.stroke || "#000"}`;
     st.textShadow = textShadowCss(it, K);
     st.paintOrder = "stroke fill";
-    st.opacity = an.opacity;
+    st.opacity = an.opacity * clamp(kv(it, "opacity", tt, it.opacity ?? 1), 0, 1);
     st.transform = `translate(-50%, calc(-50% + ${an.dy * P.canvas.h * K}px)) scale(${an.scale})`;
     l.el.classList.toggle("sel", sel?.id === it.id);
   });
@@ -547,7 +553,7 @@ function syncStage(seek = false) {
     const [s, en] = spanOf("audio", it);
     if (!(T >= s && T < en) || assetOf(it).status !== "ready") { l.audio.pause(); return; }
     const local = T - s, len = en - s;
-    let vol = it.mute ? 0 : it.volume ?? 1;
+    let vol = it.mute ? 0 : kv(it, "volume", T - s, it.volume ?? 1);
     if (it.fade_in && local < it.fade_in) vol *= local / it.fade_in;
     if (it.fade_out && local > len - it.fade_out) vol *= Math.max(0, (len - local) / it.fade_out);
     syncMedia(l.audio, it.in + local * (it.speed || 1), it.speed || 1, seek, vol);
@@ -556,6 +562,7 @@ function syncStage(seek = false) {
   Object.keys(layers).forEach((k) => !live.has(k) && dropLayer(k));
   $("#tc").textContent = fmt(T);
   $("#tc-total").textContent = fmt(totalDur());
+  refreshKfInspector();
   $("#tl-playhead").style.left = `${T * pps}px`;
 }
 
@@ -565,6 +572,84 @@ function hide(l) {
   if (l.media && !l.media.paused) l.media.pause?.();
 }
 // cortar (object-view-box recorta a mídia antes do object-fit, como o crop antes do encaixe)
+// ================================================================ keyframes (mesmas contas do keys.py)
+const KF_PROPS = { main: ["zoom", "pan_x", "pan_y", "volume"], overlay: ["x", "y", "scale", "opacity", "rotate", "volume"],
+  text: ["x", "y", "scale", "opacity"], audio: ["volume"] };
+const KF_DEF = { main: { zoom: 1, pan_x: 0, pan_y: 0, volume: 1 }, overlay: { x: 0.5, y: 0.5, scale: 0.4, opacity: 1, rotate: 0, volume: 0 },
+  text: { x: 0.5, y: 0.5, scale: 1, opacity: 1 }, audio: { volume: 1 } };
+const kfList = (it, p) => ((it.kf || {})[p] || []).filter((k) => isFinite(k[0]) && isFinite(k[1])).slice().sort((a, b) => a[0] - b[0]);
+const hasKf = (it, p) => kfList(it, p).length > 0;
+function kv(it, p, t, def) {
+  const ks = kfList(it, p);
+  if (!ks.length) return def;
+  if (t <= ks[0][0]) return ks[0][1];
+  for (let i = 0; i + 1 < ks.length; i++) {
+    const [t0, v0] = ks[i], [t1, v1] = ks[i + 1];
+    if (t < t1) {
+      let u = t1 > t0 ? (t - t0) / (t1 - t0) : 1;
+      if ((it.kf_ease || "linear") === "smooth") u = u * u * (3 - 2 * u);
+      return v0 + (v1 - v0) * u;
+    }
+  }
+  return ks[ks.length - 1][1];
+}
+const localT = (track, it) => T - spanOf(track, it)[0];
+const kval = (track, it, p) => kv(it, p, localT(track, it), it[p] ?? KF_DEF[track][p]);
+const kfTimes = (it) => [...new Set(Object.keys(it.kf || {}).flatMap((p) => kfList(it, p).map((k) => k[0])))].sort((a, b) => a - b);
+const kfTol = () => 0.5 / (P?.canvas.fps || 30);
+// mexer num valor que tem keyframes grava uma chave no ponto do cursor
+function setAnim(track, it, k, v) {
+  const ks = (it.kf || {})[k];
+  if (!ks || !ks.length) return false;
+  const t = +Math.max(0, localT(track, it)).toFixed(3);
+  const hit = ks.find((x) => Math.abs(x[0] - t) < kfTol());
+  if (hit) hit[1] = v;
+  else { ks.push([t, v]); ks.sort((a, b) => a[0] - b[0]); }
+  return true;
+}
+function toggleKey(track, it, k) {
+  commit(() => {
+    it.kf = it.kf || {};
+    const ks = it.kf[k] || (it.kf[k] = []);
+    const [s, e] = spanOf(track, it);
+    const t = +clamp(T - s, 0, e - s).toFixed(3);
+    const i = ks.findIndex((x) => Math.abs(x[0] - t) < kfTol());
+    if (i >= 0) ks.splice(i, 1);
+    else { ks.push([t, +(+kv(it, k, t, it[k] ?? KF_DEF[track][k])).toFixed(4)]); ks.sort((a, b) => a[0] - b[0]); }
+    if (!ks.length) delete it.kf[k];
+    if (!Object.keys(it.kf).length) delete it.kf;
+  });
+}
+// cortar o começo de um item: as chaves andam junto e o valor do novo começo é mantido
+function shiftKf(it, dt) {
+  if (!it.kf || !dt) return;
+  for (const p of Object.keys(it.kf)) {
+    const ks = kfList(it, p);
+    const at0 = kv(it, p, -dt, 0);
+    let moved = ks.map(([t, v]) => [+(t + dt).toFixed(3), v]);
+    if (moved.some((k) => k[0] < 0)) moved = [[0, +at0.toFixed(4)], ...moved.filter((k) => k[0] > 0)];
+    it.kf[p] = moved;
+  }
+}
+function refreshKfInspector() {
+  const it = findItem();
+  if (!it || !KF_PROPS[sel.track]) return;
+  for (const k of KF_PROPS[sel.track]) {
+    const btn = $(`#inspector [data-kf="${k}"]`);
+    if (!btn) continue;
+    const ks = kfList(it, k), t = localT(sel.track, it);
+    btn.classList.toggle("has", ks.length > 0);
+    btn.classList.toggle("on", ks.some((x) => Math.abs(x[0] - t) < kfTol()));
+    const input = $(`#inspector [data-k="${k}"]`);
+    if (ks.length && input && document.activeElement !== input) {
+      const v = kval(sel.track, it, k);
+      input.value = v;
+      const out = input.parentElement.querySelector("output");
+      if (out) out.textContent = k === "volume" ? `${Math.round(v * 100)}%` : (+v).toFixed(input.step < 0.1 ? 2 : 1);
+    }
+  }
+}
+
 // ================================================================ filtros e efeitos (mesmas contas do fx.py)
 let FX = null;
 api("/api/studio/fx").then((c) => { FX = c; if (P) { renderInspector(); syncStage(true); } }).catch(() => {});
@@ -990,6 +1075,12 @@ function itemEl(track, it, start, end, overlap = 0) {
   el.innerHTML = `<span class="lbl"></span><span class="fx">${fx.join(" ")}</span><i class="h l"></i><i class="h r"></i>
     ${overlap > 0 ? `<span class="tr" title="Transição">⇄</span>` : ""}`;
   $(".lbl", el).textContent = label;
+  kfTimes(it).forEach((t) => {
+    const d = document.createElement("i");
+    d.className = "kfd";
+    d.style.left = `${t * pps}px`;
+    el.appendChild(d);
+  });
   if (kind === "video" && a.strip && a.duration) {
     el.style.backgroundImage = `url('/media/${a.strip}')`;
     const full = (a.duration / (it.speed || 1)) * pps;
@@ -1075,12 +1166,14 @@ function bindItem(el, track, it) {
         if (mode === "trimL") {
           const s = clamp(snap(orig.start + dt, it.id), 0, orig.start + orig.dur - 0.2);
           it.start = +s.toFixed(3); it.dur = +(orig.start + orig.dur - s).toFixed(3);
+          if (orig.kf) { it.kf = JSON.parse(JSON.stringify(orig.kf)); shiftKf(it, -(it.start - orig.start)); }
         } else it.dur = +Math.max(0.2, snap(orig.start + orig.dur + dt, it.id) - orig.start).toFixed(3);
       } else if (mode === "trimL") {
         let d = dt * sp;
         d = clamp(d, -orig.in, orig.out - orig.in - 0.1);
         it.in = +(orig.in + d).toFixed(3);
         if (track !== "main") it.start = +Math.max(0, orig.start + d / sp).toFixed(3);
+        if (orig.kf) { it.kf = JSON.parse(JSON.stringify(orig.kf)); shiftKf(it, -d / sp); }
       } else {
         it.out = +clamp(orig.out + dt * sp, orig.in + 0.1, maxOut).toFixed(3);
       }
@@ -1157,12 +1250,14 @@ function splitAtPlayhead() {
     if (track === "text") {
       const parts = splitRich(it, T - it.start);
       if (parts) { Object.assign(it, parts.a); Object.assign(copy, parts.b); }
+      shiftKf(copy, -(T - it.start));
       copy.start = +T.toFixed(3); copy.dur = +(it.start + it.dur - T).toFixed(3);
       it.dur = +(T - it.start).toFixed(3);
       P.tracks.text.push(copy);
     } else {
       const cut = +(it.in + (T - s) * (it.speed || 1)).toFixed(3);
       copy.in = cut; it.out = cut;
+      shiftKf(copy, -(T - s));
       delete copy.transition;
       if (track === "main") P.tracks.main.splice(P.tracks.main.indexOf(it) + 1, 0, copy);
       else { copy.start = +T.toFixed(3); P.tracks[track].push(copy); }
@@ -1210,6 +1305,7 @@ function trimAtPlayhead(side) {
       const parts = splitRich(it, T - it.start);
       if (side === "left") {
         if (parts) Object.assign(it, parts.b);
+        shiftKf(it, -(T - it.start));
         it.dur = +(it.start + it.dur - T).toFixed(3);
         it.start = +T.toFixed(3);
       } else {
@@ -1221,6 +1317,7 @@ function trimAtPlayhead(side) {
     const cut = +(it.in + (T - s) * (it.speed || 1)).toFixed(3);
     if (side === "left") {
       it.in = cut;
+      shiftKf(it, -(T - s));
       if (track !== "main") it.start = +T.toFixed(3);
     } else it.out = cut;
   });
@@ -1323,6 +1420,54 @@ async function freezeFrame() {
   renderAssets();
   pollAssets();
 }
+// ---- legendas automáticas (transcrição no servidor; os textos entram aqui, com desfazer)
+let acTimer = null;
+api("/api/config").then((c) => {
+  const sel_ = $("#ac-preset");
+  sel_.innerHTML = Object.entries(c.caption_presets || {}).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
+}).catch(() => {});
+function renderAutocap() {
+  const j = P?.captions_job || {};
+  const st = $("#ac-status");
+  $("#ac-go").disabled = j.status === "running";
+  if (j.status === "running") {
+    st.innerHTML = `${esc(j.message || "Transcrevendo…")} ${Math.round((j.progress || 0) * 100)}%<div class="bar"><i style="width:${(j.progress || 0) * 100}%"></i></div>`;
+  } else if (j.status === "error") st.textContent = `Erro: ${j.error}`;
+  else if (j.status === "applied") st.textContent = "Legendas colocadas na timeline (Ctrl+Z desfaz).";
+  else st.textContent = "";
+}
+async function pollAutocap() {
+  clearTimeout(acTimer);
+  if (!P) return;
+  const pid = P.id;
+  const fresh = await api(`/api/studio/projects/${pid}`).catch(() => null);
+  if (!fresh || !P || P.id !== pid) return;
+  P.captions_job = fresh.captions_job;
+  const j = P.captions_job || {};
+  if (j.status === "done" && Array.isArray(j.items)) {
+    commit(() => {
+      P.tracks.text = P.tracks.text.filter((t) => !String(t.id).startsWith("tauto"));
+      P.tracks.text.push(...j.items);
+    });
+    await sendJSON("POST", `/api/studio/projects/${pid}/autocaptions/ack`, {}).catch(() => {});
+    P.captions_job = { ...j, items: null, status: "applied" };
+    toast(j.items.length ? `${j.items.length} legendas adicionadas` : "Não encontrei fala no áudio");
+  }
+  renderAutocap();
+  if ((P.captions_job || {}).status === "running") acTimer = setTimeout(pollAutocap, 1500);
+}
+$("#ac-go").onclick = async () => {
+  if (!P) return;
+  await flushSave();
+  try {
+    await sendJSON("POST", `/api/studio/projects/${P.id}/autocaptions`, {
+      preset: $("#ac-preset").value, position: $("#ac-pos").value, color: $("#ac-color").value, upper: $("#ac-upper").checked,
+    });
+    P.captions_job = { status: "running", progress: 0, message: "Preparando o áudio…" };
+    renderAutocap();
+    pollAutocap();
+  } catch (ex) { $("#ac-status").textContent = `Erro: ${ex.message}`; }
+};
 let voiceAudio = null;
 async function previewVoice(track, it, btn) {
   const [s] = spanOf(track, it);
@@ -1420,6 +1565,7 @@ function renderInspector() {
     }
     h.push(group("Animação de entrada", seg("", "anim", [["none", "Nenhuma"], ["fade", "Esmaecer"], ["pop", "Pop"], ["slide", "Subir"], ["zoom", "Zoom"]], it.anim || "none")));
     h.push(group("Posição e tempo", `${slider("X", "x", 0, 1, 0.005, it.x ?? 0.5)}${slider("Y", "y", 0, 1, 0.005, it.y ?? 0.5)}
+      ${slider("Escala", "scale", 0.2, 3, 0.01, it.scale ?? 1, "x")}${slider("Opacidade", "opacity", 0, 1, 0.01, it.opacity ?? 1)}
       ${num("Início (s)", "start", it.start)}${num("Duração (s)", "dur", it.dur)}`));
   } else {
     if (a.kind !== "image") {
@@ -1493,10 +1639,33 @@ function renderInspector() {
         ${tr.type ? slider("Duração", "tdur", 0.1, 2, 0.05, tr.dur ?? 0.5, "s") : ""}`));
     }
   }
+  if (KF_PROPS[track]) {
+    const n = kfTimes(it).length;
+    h.push(group("Keyframes (animação)", `<div class="insp-actions"><button class="ghost" data-act="kfprev" title="Chave anterior">◀ ◆</button>
+      <button class="ghost" data-act="kfnext" title="Próxima chave">◆ ▶</button>${n ? `<button class="ghost danger" data-act="kfclear">Apagar todas (${n})</button>` : ""}</div>
+      ${seg("Curva", "kf_ease", [["linear", "Linear"], ["smooth", "Suave"]], it.kf_ease || "linear")}
+      <p class="muted small">Clique no ◆ ao lado de um valor (zoom, posição, tamanho, opacidade, rotação, volume) para marcar uma chave no ponto do cursor.
+      Depois mova o cursor e mude o valor: outra chave é criada e, entre as chaves, o valor anda sozinho.</p>`));
+  }
   h.push(`<div class="insp-actions"><button class="secondary" data-act="split">✂ Dividir</button>
     <button class="ghost" data-act="dup">⧉ Duplicar</button><button class="ghost danger" data-act="del">🗑 Excluir</button></div>`);
   box.innerHTML = h.join("");
+  // botão ◆ ao lado de cada valor que dá para animar, mostrando o valor no ponto do cursor
+  for (const k of KF_PROPS[track] || []) {
+    const input = $(`[data-k="${k}"]`, box);
+    if (!input || input.type !== "range") continue;
+    const b = document.createElement("button");
+    b.className = "kfb";
+    b.dataset.kf = k;
+    b.title = "Keyframe neste ponto";
+    b.textContent = "◆";
+    b.onclick = () => toggleKey(track, it, k);
+    input.parentElement.classList.add("kf-row");
+    input.parentElement.appendChild(b);
+    if (hasKf(it, k)) input.value = kval(track, it, k);
+  }
   bindInspector(box, it, track);
+  refreshKfInspector();
 }
 
 function renderProjectInspector(box) {
@@ -1543,7 +1712,8 @@ function liveInput(box, k, it, apply) {
   el.addEventListener("input", () => {
     before = before || snapshot();
     const v = el.type === "checkbox" ? el.checked : el.type === "range" || el.type === "number" ? +el.value : el.value;
-    apply(v);
+    const tr = sel?.track;
+    if (!(it && tr && (KF_PROPS[tr] || []).includes(k) && setAnim(tr, it, k, +(+v).toFixed(4)))) apply(v);
     if (out && el.type === "range") out.textContent = el.step < 0.1 ? (+el.value).toFixed(2) : (+el.value).toFixed(1);
     syncStage(true);
     if (["in", "out", "speed", "start", "dur", "imgdur", "tdur"].includes(k)) renderTimeline();
@@ -1597,7 +1767,8 @@ function bindInspector(box, it, track) {
   bindSeg(box, "hl_mode", (v) => commit(() => (it.hl_mode = v)));
   bindSeg(box, "fit", (v) => commit(() => (it.fit = v)));
   bindSeg(box, "speedp", (v) => commit(() => (it.speed = +v)));
-  bindSeg(box, "rotp", (v) => commit(() => (it.rotate = +v)));
+  bindSeg(box, "rotp", (v) => commit(() => { if (!setAnim(track, it, "rotate", +v)) it.rotate = +v; }));
+  bindSeg(box, "kf_ease", (v) => commit(() => (v === "smooth" ? (it.kf_ease = v) : delete it.kf_ease)));
   bindSeg(box, "style", (v) => commit(() => (v === "b" ? (it.bold = it.bold === false) : (it.italic = !it.italic))));
   $$("[data-act]", box).forEach((b) => (b.onclick = () => {
     const act = b.dataset.act;
@@ -1605,6 +1776,13 @@ function bindInspector(box, it, track) {
     if (act === "dup") return duplicateSelected();
     if (act === "del") return deleteSelected();
     if (act === "resetfx") return commit(() => delete it.fx);
+    if (act === "kfclear") return commit(() => { delete it.kf; });
+    if (act === "kfprev" || act === "kfnext") {
+      const s0 = spanOf(track, it)[0], ts = kfTimes(it).map((t) => s0 + t);
+      const t = act === "kfprev" ? ts.reverse().find((x) => x < T - 0.01) : ts.find((x) => x > T + 0.01);
+      if (t !== undefined) { stopPlayback(); setTime(t); }
+      return;
+    }
     if (act === "voiceprev") return previewVoice(track, it, b);
     if (act === "fliph") return commit(() => (it.flip_h = !it.flip_h));
     if (act === "flipv") return commit(() => (it.flip_v = !it.flip_v));

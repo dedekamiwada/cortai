@@ -68,6 +68,18 @@
     <div class="bin-panel hidden" data-panel="text">
       <p class="muted small">Clique para adicionar no ponto onde está o cursor da timeline.</p>
       <div class="text-presets" id="text-presets"></div>
+      <div class="autocap">
+        <h4>Legendas automáticas</h4>
+        <p class="muted small">Transcreve a fala dos vídeos da faixa principal (Whisper, aqui no seu PC) e cria as legendas com destaque palavra por palavra. Gerar de novo troca as anteriores.</p>
+        <select id="ac-preset"></select>
+        <div class="autocap-row">
+          <select id="ac-pos"><option value="bottom">Embaixo</option><option value="middle">No meio</option><option value="top">No topo</option></select>
+          <input type="color" id="ac-color" value="#FFE600" title="Cor do destaque">
+          <label class="check small"><input type="checkbox" id="ac-upper" checked> CAIXA ALTA</label>
+        </div>
+        <button class="primary" id="ac-go">Gerar legendas</button>
+        <div id="ac-status" class="muted small"></div>
+      </div>
     </div>
     <div class="bin-panel hidden" data-panel="trans">
       <p class="muted small">Selecione um vídeo na faixa principal e escolha a transição de entrada dele.</p>
