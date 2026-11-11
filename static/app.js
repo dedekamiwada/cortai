@@ -506,6 +506,7 @@ async function openEditor(jobId, n) {
     jobId, n, data, ws, we,
     sel: { s: data.clip.start, e: data.clip.end },
     fixes: { ...(o.word_fixes || {}) },
+    adds: (o.word_adds || []).map((a) => ({ w: a.w, s: +a.s, e: +a.e })),
     playingSel: false, drag: null,
   };
   const { width: sw, height: sh } = data.source;
@@ -537,6 +538,8 @@ async function openEditor(jobId, n) {
   $("#ed-layout").disabled = vertical;
   $("#ed-vertical-note").classList.toggle("hidden", !vertical);
 
+  addEdit = null;
+  $("#ed-add").classList.add("hidden");
   $("#ed-loading").classList.add("hidden");
   $("#ed-body").classList.remove("hidden");
   $("#ed-save").disabled = false;
@@ -639,6 +642,21 @@ function drawTimeline() {
   ctx.fillRect(xe - 2, 0, 4, H);
   ctx.fillRect(xs - 6, H / 2 - 10, 8, 20);
   ctx.fillRect(xe - 2, H / 2 - 10, 8, 20);
+  // legendas adicionadas à mão (arraste para mover)
+  ctx.font = "700 10px system-ui, sans-serif";
+  ed.adds.forEach((a) => {
+    const x0 = x(a.s), bw = Math.max(6, x(a.e) - x(a.s));
+    const editing = addEdit && addEdit.a === a;
+    ctx.fillStyle = editing ? accent : "rgba(185, 242, 39, .6)";
+    ctx.fillRect(x0, ADD_BAR.y, bw, ADD_BAR.h);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, ADD_BAR.y, bw, ADD_BAR.h);
+    ctx.clip();
+    ctx.fillStyle = "#111";
+    ctx.fillText(a.w, x0 + 3, ADD_BAR.y + 12);
+    ctx.restore();
+  });
   // cursor
   ctx.fillStyle = "#fff";
   ctx.fillRect(x(nowT()) - 1, 0, 2, H);
@@ -652,7 +670,9 @@ canvas.addEventListener("pointerdown", (e) => {
   const toT = (p) => ed.ws + (p / W) * (ed.we - ed.ws);
   const xs = ((ed.sel.s - ed.ws) / (ed.we - ed.ws)) * W;
   const xe = ((ed.sel.e - ed.ws) / (ed.we - ed.ws)) * W;
-  if (Math.abs(px - xs) < 10) ed.drag = { kind: "s" };
+  const bar = addBarAt(px, e.clientY - rect.top, W);
+  if (bar) { ed.drag = { kind: "add", a: bar, off: toT(px) - bar.s }; openAddPanel(bar); }
+  else if (Math.abs(px - xs) < 10) ed.drag = { kind: "s" };
   else if (Math.abs(px - xe) < 10) ed.drag = { kind: "e" };
   else if (px > xs && px < xe && e.shiftKey) ed.drag = { kind: "move", off: toT(px) - ed.sel.s };
   else { seek(toT(px)); ed.drag = { kind: "seek" }; }
@@ -665,9 +685,20 @@ canvas.addEventListener("pointermove", (e) => {
   const px = e.clientX - rect.left;
   const xs = ((ed.sel.s - ed.ws) / (ed.we - ed.ws)) * rect.width;
   const xe = ((ed.sel.e - ed.ws) / (ed.we - ed.ws)) * rect.width;
-  canvas.style.cursor = Math.abs(px - xs) < 10 || Math.abs(px - xe) < 10 ? "ew-resize" : "pointer";
+  const overBar = addBarAt(px, e.clientY - rect.top, rect.width);
+  canvas.style.cursor = ed.drag?.kind === "add" ? "grabbing" : overBar ? "grab"
+    : Math.abs(px - xs) < 10 || Math.abs(px - xe) < 10 ? "ew-resize" : "pointer";
   if (!ed.drag) return;
   const t = Math.min(Math.max(ed.drag.toT(px), ed.ws), ed.we);
+  if (ed.drag.kind === "add") {
+    const a = ed.drag.a, len = a.e - a.s;
+    const s = Math.min(Math.max(t - ed.drag.off, ed.ws), ed.we - len);
+    a.s = +s.toFixed(3);
+    a.e = +(s + len).toFixed(3);
+    if (addEdit && addEdit.a === a) $("#ed-add-start").value = Math.max(0, a.s - ed.sel.s).toFixed(1);
+    seek(a.s);
+    return;
+  }
   if (ed.drag.kind === "s") { if (t < ed.sel.e - 1) { ed.sel.s = t; seek(t); } }
   else if (ed.drag.kind === "e") { if (t > ed.sel.s + 1) { ed.sel.e = t; seek(t); } }
   else if (ed.drag.kind === "move") {
@@ -677,25 +708,39 @@ canvas.addEventListener("pointermove", (e) => {
     tick();
   } else seek(t);
 });
-canvas.addEventListener("pointerup", () => { if (ed) ed.drag = null; });
+canvas.addEventListener("pointerup", () => {
+  if (!ed) return;
+  const moved = ed.drag?.kind === "add";
+  ed.drag = null;
+  if (moved) refreshAdds();
+});
 window.addEventListener("resize", () => drawTimeline());
 
-// ---- transcrição
+// ---- transcrição (palavras do Whisper + legendas adicionadas à mão)
 function wordText(w) {
   const k = w.s.toFixed(2);
   return k in ed.fixes ? ed.fixes[k] : w.w;
 }
+function transcriptItems() {
+  const items = ed.data.words.map((w) => ({ s: w.s, e: w.e, word: w }));
+  ed.adds.forEach((a) => items.push({ s: a.s, e: a.e, add: a }));
+  return items.sort((x, y) => x.s - y.s);
+}
 function renderWords() {
   const box = $("#ed-words");
-  box.replaceChildren(...ed.data.words.map((w, i) => {
+  ed.items = transcriptItems();
+  box.replaceChildren(...ed.items.map((it) => {
     const span = document.createElement("span");
-    span.dataset.i = i;
-    span.onclick = () => seek(w.s);
-    span.ondblclick = () => editWord(span, w);
-    fillWord(span, w);
+    span.onclick = () => { seek(it.s); if (it.add) openAddPanel(it.add); };
+    if (!it.add) span.ondblclick = () => editWord(span, it.word);
+    if (it.add) fillAdded(span, it.add);
+    else fillWord(span, it.word);
+    it.span = span;
     return span;
   }));
+  lastNow = null;
   updateWordClasses(nowT());
+  drawTimeline();
 }
 function fillWord(span, w) {
   const k = w.s.toFixed(2);
@@ -703,23 +748,27 @@ function fillWord(span, w) {
   span.textContent = fixed && !ed.fixes[k] ? w.w : wordText(w);
   span.classList.toggle("fixed", fixed && !!ed.fixes[k]);
   span.classList.toggle("removed", fixed && !ed.fixes[k]);
-  span.title = fixed ? `original: ${w.w}` : "";
+  const covered = coveredByAdd(w);
+  span.classList.toggle("covered", covered);
+  span.title = covered ? "fora da legenda: no lugar dela entra a legenda adicionada" : fixed ? `original: ${w.w}` : "";
 }
-function editWord(span, w) {
+function fillAdded(span, a) {
+  span.textContent = a.w;
+  span.classList.add("added");
+  span.classList.toggle("editing", !!addEdit && addEdit.a === a);
+  span.title = `legenda adicionada · ${(a.s - ed.sel.s).toFixed(1)}s do corte, ${(a.e - a.s).toFixed(1)}s · clique para editar, mover ou excluir`;
+}
+function inlineInput(span, value, onDone) {
   const input = document.createElement("input");
-  input.value = wordText(w);
+  input.value = value;
   span.replaceChildren(input);
   input.focus();
   input.select();
+  let closed = false;
   const done = (save) => {
-    if (save) {
-      const k = w.s.toFixed(2);
-      const v = input.value.trim();
-      if (v === w.w) delete ed.fixes[k];
-      else ed.fixes[k] = v;
-    }
-    fillWord(span, w);
-    updateCaptionPreview(nowT());
+    if (closed) return;
+    closed = true;
+    onDone(save, input.value.trim());
   };
   input.onkeydown = (e) => {
     if (e.key === "Enter") { e.preventDefault(); done(true); }
@@ -727,24 +776,133 @@ function editWord(span, w) {
   };
   input.onblur = () => done(true);
 }
-let lastNow = -1;
-function updateWordClasses(t) {
-  const spans = $("#ed-words").children;
-  let nowIdx = -1;
-  ed.data.words.forEach((w, i) => {
-    const s = spans[i];
-    if (!s || s.firstElementChild) return;
-    s.classList.toggle("in", w.e > ed.sel.s && w.s < ed.sel.e);
-    if (t >= w.s && t <= w.e + 0.05) nowIdx = i;
-  });
-  if (nowIdx !== lastNow) {
-    if (spans[lastNow]) spans[lastNow].classList.remove("now");
-    if (spans[nowIdx]) {
-      spans[nowIdx].classList.add("now");
-      if (!vid.paused) spans[nowIdx].scrollIntoView({ block: "nearest" });
+function editWord(span, w) {
+  inlineInput(span, wordText(w), (save, v) => {
+    if (save) {
+      const k = w.s.toFixed(2);
+      if (v === w.w) delete ed.fixes[k];
+      else ed.fixes[k] = v;
     }
-    lastNow = nowIdx;
+    fillWord(span, w);
+    updateWordClasses(nowT());
+    updateCaptionPreview(nowT());
+  });
+}
+let lastNow = null;
+function updateWordClasses(t) {
+  if (!ed || !ed.items) return;
+  let now = null;
+  ed.items.forEach((it) => {
+    const s = it.span;
+    if (!s || s.firstElementChild) return;
+    s.classList.toggle("in", it.e > ed.sel.s && it.s < ed.sel.e);
+    if (t >= it.s && t <= it.e + 0.05) now = it;
+  });
+  if (now !== lastNow) {
+    if (lastNow && lastNow.span) lastNow.span.classList.remove("now");
+    if (now && now.span) {
+      now.span.classList.add("now");
+      if (!vid.paused) now.span.scrollIntoView({ block: "nearest" });
+    }
+    lastNow = now;
   }
+}
+
+// ---- legendas adicionadas: criar, editar, mover e excluir
+let addEdit = null; // { a, orig } enquanto edita uma legenda que já existe
+const relNow = () => Math.max(0, nowT() - ed.sel.s).toFixed(1);
+function openAddPanel(a = null) {
+  if (!ed) return;
+  if (addEdit && addEdit.a === a) return;
+  if (addEdit) closeAddPanel(false);
+  addEdit = a ? { a, orig: { ...a } } : null;
+  $("#ed-add").classList.remove("hidden");
+  $("#ed-add-title").textContent = a ? "Editar legenda adicionada" : "Nova legenda";
+  $("#ed-add-ok").textContent = a ? "Pronto" : "Adicionar";
+  $("#ed-add-del").classList.toggle("hidden", !a);
+  $("#ed-add-text").value = a ? a.w : "";
+  $("#ed-add-start").value = a ? Math.max(0, a.s - ed.sel.s).toFixed(1) : relNow();
+  if (a) $("#ed-add-dur").value = (a.e - a.s).toFixed(1);
+  refreshAdds();
+  if (!a) $("#ed-add-text").focus();
+}
+function closeAddPanel(revert) {
+  if (revert && addEdit) Object.assign(addEdit.a, addEdit.orig);
+  addEdit = null;
+  $("#ed-add").classList.add("hidden");
+  refreshAdds();
+}
+function refreshAdds() {
+  if (!ed) return;
+  renderWords();
+  updateCaptionPreview(nowT());
+}
+function readPanel() {  // formulário (segundos do corte) -> segundos do vídeo original
+  const rel = Math.max(0, +$("#ed-add-start").value || 0);
+  const dur = Math.max(0.2, +$("#ed-add-dur").value || 1.5);
+  const s = Math.min(ed.sel.s + rel, ed.sel.e - 0.2);
+  return { w: $("#ed-add-text").value.trim(), s: +s.toFixed(3), e: +Math.min(s + dur, ed.we).toFixed(3) };
+}
+function livePanel() {  // editando uma que já existe: cada mudança aparece na hora
+  if (!ed || !addEdit) return;
+  const v = readPanel();
+  addEdit.a.s = v.s;
+  addEdit.a.e = v.e;
+  if (v.w) addEdit.a.w = v.w;
+  refreshAdds();
+}
+["ed-add-text", "ed-add-start", "ed-add-dur"].forEach((id) => $(`#${id}`).addEventListener("input", livePanel));
+function nudge(d) {
+  if (!ed) return;
+  $("#ed-add-start").value = Math.max(0, (+$("#ed-add-start").value || 0) + d).toFixed(1);
+  livePanel();
+  if (addEdit) seek(addEdit.a.s);
+}
+$("#ed-add-open").onclick = () => openAddPanel(null);
+$("#ed-add-back").onclick = () => nudge(-0.1);
+$("#ed-add-fwd").onclick = () => nudge(0.1);
+$("#ed-add-now").onclick = () => { if (ed) { $("#ed-add-start").value = relNow(); livePanel(); } };
+$("#ed-add-ok").onclick = confirmAdd;
+$("#ed-add-cancel").onclick = () => closeAddPanel(true);
+$("#ed-add-del").onclick = () => {
+  if (!ed || !addEdit) return;
+  ed.adds = ed.adds.filter((x) => x !== addEdit.a);
+  addEdit = null;
+  closeAddPanel(false);
+};
+$("#ed-add").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.matches("input")) { e.preventDefault(); confirmAdd(); }
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeAddPanel(true); }
+});
+function confirmAdd() {
+  if (!ed) return;
+  const v = readPanel();
+  if (!v.w) { $("#ed-add-text").focus(); return; }
+  if (addEdit) Object.assign(addEdit.a, v);
+  else ed.adds.push(v);
+  addEdit = null;
+  closeAddPanel(false);
+  seek(v.s);
+}
+// barra da legenda adicionada na linha do tempo (arrastar move)
+const ADD_BAR = { y: 9, h: 16 };
+function addBarAt(px, py, W) {
+  if (py < ADD_BAR.y - 3 || py > ADD_BAR.y + ADD_BAR.h + 3) return null;
+  const x = (t) => ((t - ed.ws) / (ed.we - ed.ws)) * W;
+  return ed.adds.find((a) => px >= x(a.s) - 3 && px <= x(a.s) + Math.max(6, x(a.e) - x(a.s)) + 3) || null;
+}
+
+// a legenda adicionada toma o lugar da fala no trecho dela (igual ao captions.apply_fixes)
+const coveredByAdd = (w) => ed.adds.some((a) => a.w && a.s - 0.05 <= w.s && w.s < a.e);
+function expandAdds(adds) {  // igual ao captions.expand_adds: várias palavras dividem o intervalo
+  const out = [];
+  adds.forEach((a, gi) => {
+    const parts = a.w.split(/\s+/).filter(Boolean);
+    if (!parts.length || a.e <= a.s) return;
+    const step = (a.e - a.s) / parts.length;
+    parts.forEach((p, i) => out.push({ w: p, s: a.s + i * step, e: a.s + (i + 1) * step, added: gi + 1 }));
+  });
+  return out;
 }
 
 // ---- prévia da legenda e do enquadramento
@@ -764,9 +922,9 @@ function updateCaptionPreview(t) {
   const cap = $("#ed-caption");
   const [maxWords, maxChars] = PRESET_CHUNK[$("#ed-preset").value] || [3, 18];
   const mode = $("#ed-preset").value;
-  const words = ed.data.words
-    .map((w) => ({ ...w, w: wordText(w) }))
-    .filter((w) => w.w && w.e > ed.sel.s && w.s < ed.sel.e);
+  const words = [...ed.data.words.filter((w) => !coveredByAdd(w)).map((w) => ({ ...w, w: wordText(w) })), ...expandAdds(ed.adds)]
+    .filter((w) => w.w && w.e > ed.sel.s && w.s < ed.sel.e)
+    .sort((a, b) => a.s - b.s);
   // mesmo agrupamento do captions.py
   const chunks = [];
   let cur = [];
@@ -775,7 +933,8 @@ function updateCaptionPreview(t) {
       const len = cur.reduce((a, x) => a + x.w.length + 1, 0) + w.w.length;
       const gap = w.s - cur[cur.length - 1].e;
       const endSent = /[.?!…]$/.test(cur[cur.length - 1].w);
-      if (cur.length >= maxWords || len > maxChars || gap > 0.5 || endSent) { chunks.push(cur); cur = []; }
+      const otherSource = cur[cur.length - 1].added !== w.added;  // legenda manual fica no próprio bloco
+      if (cur.length >= maxWords || len > maxChars || gap > 0.5 || endSent || otherSource) { chunks.push(cur); cur = []; }
     }
     cur.push(w);
   }
@@ -832,6 +991,7 @@ $("#ed-save").onclick = async () => {
     auto_zoom: $("#ed-zoom").checked, remove_pauses: $("#ed-pauses").checked,
     keyword_highlight: $("#ed-keywords").checked, keyword_color: $("#ed-kwcolor").value,
     word_fixes: ed.fixes,
+    word_adds: ed.adds.map(({ w, s, e }) => ({ w, s, e })),
   };
   $("#ed-save").disabled = true;
   try {

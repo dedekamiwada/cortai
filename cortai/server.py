@@ -309,9 +309,13 @@ async def studio_create(request: Request):
                 seg.parent.mkdir(exist_ok=True)
                 await run_in_threadpool(_cut_segment, job["source"]["path"], seg_start, seg_end, seg)
                 asset = studio.add_asset(p["id"], seg)
-                studio.mutate(p["id"], lambda pr: pr["tracks"]["main"].append({
-                    "id": "i" + asset["id"], "asset": asset["id"], "in": round(clip["start"] - seg_start, 3),
-                    "out": round(clip["end"] - seg_start, 3), "speed": 1, "volume": 1, "fit": "fill"}))
+                # leva junto o que o clipe tem: cortes de pausa, zooms de reação, legendas e título
+                tracks = await run_in_threadpool(jobs.studio_tracks, job["id"], clip["n"], seg_start, asset["id"])
+
+                def fill(pr, tracks=tracks):
+                    pr["tracks"]["main"] = tracks["main"]
+                    pr["tracks"]["text"] = tracks["text"]
+                studio.mutate(p["id"], fill)
     return studio.load(p["id"])
 
 

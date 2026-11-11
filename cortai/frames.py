@@ -48,5 +48,9 @@ def grid(src: Path, start: float, end: float, out: Path, src_w: int, src_h: int,
         cv2.rectangle(tile, (0, 0), (w - 1, h - 1), (60, 60, 60), 1)
         sheet[r * h : (r + 1) * h, c * w : (c + 1) * w] = tile
     out.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out), sheet, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    # cv2.imwrite não aceita caminho com acento no Windows (falha calada); codifica e grava pelo Python
+    ok, buf = cv2.imencode(".jpg", sheet, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    if not ok:
+        raise RuntimeError("não consegui gerar a folha de frames")
+    out.write_bytes(buf.tobytes())
     return out

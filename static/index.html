@@ -293,10 +293,26 @@
     </div>
     <div class="ed-timeline">
       <canvas id="ed-canvas" height="84"></canvas>
-      <div class="ed-tl-labels"><span id="ed-sel-label"></span><span class="muted small">Arraste as bordas para cortar · clique para ir ao ponto · espaço toca/pausa</span></div>
+      <div class="ed-tl-labels"><span id="ed-sel-label"></span><span class="muted small">Arraste as bordas para cortar · arraste a barra verde de uma legenda adicionada para movê-la · clique para ir ao ponto · espaço toca/pausa</span></div>
     </div>
     <div class="ed-words-wrap">
-      <h4>Transcrição <span class="muted small">— clique numa palavra para ir até ela, duplo clique para corrigir (vazio apaga da legenda)</span></h4>
+      <div class="ed-words-head">
+        <h4>Transcrição <span class="muted small">— clique numa palavra para ir até ela, duplo clique para corrigir (vazio apaga da legenda)</span></h4>
+        <button class="ghost" id="ed-add-open" type="button">＋ Adicionar legenda</button>
+      </div>
+      <div id="ed-add" class="ed-add hidden">
+        <b id="ed-add-title">Nova legenda</b>
+        <input id="ed-add-text" type="text" maxlength="200" placeholder="Texto da legenda (ex.: AAAAAHH)">
+        <label>Começa em <input id="ed-add-start" type="number" step="0.1" min="0"> s do corte</label>
+        <button class="ghost" id="ed-add-back" type="button" title="Mover 0,1 s para trás">◀</button>
+        <button class="ghost" id="ed-add-fwd" type="button" title="Mover 0,1 s para frente">▶</button>
+        <button class="ghost" id="ed-add-now" type="button" title="Colocar no ponto atual do vídeo">⏱ Agora</button>
+        <label>Duração <input id="ed-add-dur" type="number" step="0.1" min="0.2" value="1.5"> s</label>
+        <button class="primary" id="ed-add-ok" type="button">Adicionar</button>
+        <button class="ghost danger hidden" id="ed-add-del" type="button">🗑 Excluir</button>
+        <button class="ghost" id="ed-add-cancel" type="button">Cancelar</button>
+        <p class="muted small">A legenda sai com o mesmo estilo das outras e, no trecho dela, aparece no lugar da fala. Para editar, mover ou excluir uma legenda adicionada, clique nela na transcrição (borda tracejada) ou arraste a barra verde dela na linha do tempo.</p>
+      </div>
       <div id="ed-words" class="ed-words"></div>
     </div>
   </div>

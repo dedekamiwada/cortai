@@ -188,6 +188,20 @@ h4 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; te
 .ed-words span.fixed { text-decoration: underline dotted var(--accent); }
 .ed-words span.removed { text-decoration: line-through; opacity: .5; }
 .ed-words input { width: 9em; padding: 2px 6px; font-size: 13px; }
+.ed-words span.covered { opacity: .45; font-style: italic; }
+.ed-words span.added { color: var(--accent); border: 1px dashed var(--accent); }
+.ed-words span.added.now { color: var(--accent-ink); }
+.ed-words-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ed-words-head h4 { margin: 0; }
+.ed-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; padding: 10px 12px;
+  background: var(--panel-2); border: 1px solid var(--accent); border-radius: 10px; font-size: 13px; }
+.ed-add #ed-add-text { flex: 1 1 220px; }
+.ed-add label { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.ed-add input[type=number] { width: 5.5em; }
+.ed-add p { flex-basis: 100%; margin: 0; }
+.ed-add #ed-add-title { flex-basis: 100%; font-size: 13px; }
+.ed-add #ed-add-back, .ed-add #ed-add-fwd { padding-left: 10px; padding-right: 10px; }
+.ed-words span.added.editing { background: var(--accent); color: var(--accent-ink); border-style: solid; }
 .ed-foot { display: flex; gap: 8px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line); }
 .ed-foot .form-error { flex: 1; margin: 0; }
 @media (max-width: 760px) {
