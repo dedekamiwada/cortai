@@ -260,5 +260,92 @@ def catalog() -> dict:
         "looks": [{"id": k, "label": v[0], "matrix": v[1]} for k, v in LOOKS.items()],
         "effects": [{"id": k, "label": v} for k, v in EFFECTS.items()],
         "voices": [{"id": k, "label": v} for k, v in VOICES.items()],
+        "keys": [{"id": k, "label": v} for k, v in KEYS.items()],
+        "blends": [{"id": k, "label": v[0]} for k, v in BLENDS.items()],
         "shake_zoom": SHAKE_ZOOM, "vignette_start": VIGNETTE_START,
     }
+
+
+# ---------------------------------------------------------------- transições próprias
+# Chicote, zoom, giro e glitch trocam de vídeo no meio da transição: o fim do vídeo que sai e o começo
+# do que entra (metade da duração cada) recebem um filtro animado pelo tempo local t (0..h) e são
+# emendados. Luz vazando é um esmaecer com um clarão quente atravessando o quadro.
+CUSTOM_TRANSITIONS = {
+    "whip": "Chicote", "zoomblur": "Zoom com desfoque", "spin": "Giro", "glitch": "Glitch", "lightleak": "Luz vazando",
+}
+CUT_TRANSITIONS = ("whip", "zoomblur", "spin", "glitch")
+
+
+def cut_chain(name: str, side: str, h: float, W: int, H: int) -> str:
+    """Filtro da metade `side` ("out" = fim do vídeo que sai, "in" = começo do que entra).
+    Mesmas curvas da prévia (customTransition no studio.js): q vai de 0 a 1 no sentido do corte."""
+    q = f"(t/{h:.4f})" if side == "out" else f"(1-t/{h:.4f})"
+    tail = "format=yuv420p,setsar=1"
+    if name == "zoomblur":
+        z = f"(1+1.5*{q}*{q})"
+        return (f"scale=w='trunc(iw*{z}/2)*2':h='trunc(ih*{z}/2)*2':eval=frame,crop={W}:{H},"
+                f"tmix=frames=3,{tail}")
+    if name == "spin":
+        a = f"PI*{q}*{q}" if side == "out" else f"-PI*{q}*{q}"
+        return f"rotate=a='{a}':c=black,tmix=frames=3,{tail}"
+    if name == "whip":  # sai acelerando para a esquerda; o próximo entra pela direita freando
+        if side == "out":
+            return f"pad=iw*2.5:ih:0:0:black,crop={W}:{H}:x='iw*0.6*{q}*{q}':y=0,tmix=frames=4,{tail}"
+        return f"pad=iw*2.5:ih:iw*1.5:0:black,crop={W}:{H}:x='iw*0.6-iw*0.6*{q}*{q}':y=0,tmix=frames=4,{tail}"
+    if name == "glitch":
+        return (f"pad=iw*1.3:ih:iw*0.15:0,crop={W}:{H}:x='iw*(0.115+0.1*sin(t*97)*gt(sin(t*53),0.2))':y=0,"
+                f"rgbashift=rh=-14:bh=14:edge=smear,hue=h='90*gt(sin(t*71),0.5)':s='1+gt(sin(t*37),0.3)',"
+                f"noise=alls=18:allf=t,{tail}")
+    return tail
+
+
+def leak_png(path: Path, W: int, H: int) -> None:
+    """Clarão laranja com bordas suaves (atravessa o quadro na transição Luz vazando)."""
+    import cv2
+    import numpy as np
+    w = W
+    yy, xx = np.mgrid[0:H, 0:w].astype(np.float32)
+    d = np.sqrt(((xx - w / 2) / (w / 2)) ** 2 + ((yy - H * 0.35) / (H * 0.6)) ** 2)
+    alpha = np.clip(1 - d, 0, 1) ** 1.6 * 0.85
+    img = np.zeros((H, w, 4), np.uint8)
+    img[..., 0], img[..., 1], img[..., 2] = 40, 150, 255  # BGR: laranja
+    img[..., 3] = (alpha * 255).astype(np.uint8)
+    ok, buf = cv2.imencode(".png", img)
+    path.write_bytes(buf.tobytes())
+
+
+# ---------------------------------------------------------------- fundo verde e mesclagem (sobreposições)
+KEYS = {"": "Nenhum", "green": "Verde", "blue": "Azul", "black": "Preto", "white": "Branco", "custom": "Outra cor"}
+KEY_COLORS = {"green": "#00FF00", "blue": "#0000FF", "black": "#000000", "white": "#FFFFFF"}
+BLENDS = {  # modo -> (nome, filtro blend do ffmpeg, cor neutra: onde a sobreposição não muda nada)
+    "": ("Normal", None, None),
+    "screen": ("Tela (clarear)", "screen", "black"),
+    "addition": ("Somar", "addition", "black"),
+    "lighten": ("Clarear", "lighten", "black"),
+    "multiply": ("Multiplicar", "multiply", "white"),
+    "darken": ("Escurecer", "darken", "white"),
+    "overlay": ("Sobrepor", "overlay", "0x808080"),
+    "difference": ("Diferença", "difference", "black"),
+}
+
+
+def key_filter(it: dict) -> str | None:
+    """Recorte de fundo: chromakey (verde/azul/cor, em YUV) ou colorkey (preto/branco)."""
+    key = str(it.get("key") or "")
+    if key not in KEYS or not key:
+        return None
+    color = (it.get("key_color") if key == "custom" else KEY_COLORS.get(key)) or "#00FF00"
+    hexc = "0x" + color.lstrip("#")[:6]
+    sim = max(0.01, min(0.9, float(it.get("key_sim", 0.3 if key not in ("black", "white") else 0.12))))
+    soft = max(0.0, min(0.5, float(it.get("key_blend", 0.1))))
+    if key in ("black", "white"):
+        return f"colorkey=color={hexc}:similarity={sim:.3f}:blend={soft:.3f}"
+    out = f"chromakey=color={hexc}:similarity={sim:.3f}:blend={soft:.3f}"
+    if key in ("green", "blue"):
+        out += f",despill=type={key}:mix=0.5:expand=0.1"
+    return out
+
+
+def blend_mode(it: dict) -> tuple[str, str] | None:
+    b = BLENDS.get(str(it.get("blend") or ""))
+    return (b[1], b[2]) if b and b[1] else None

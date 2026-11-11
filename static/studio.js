@@ -28,6 +28,7 @@ const TRANSITIONS = [
   ["slideleft", "Deslizar ←"], ["slideright", "Deslizar →"], ["slideup", "Deslizar ↑"], ["slidedown", "Deslizar ↓"],
   ["wipeleft", "Cortina ←"], ["wiperight", "Cortina →"], ["circleopen", "Círculo abre"], ["circleclose", "Círculo fecha"],
   ["zoomin", "Zoom"], ["radial", "Radial"], ["pixelize", "Pixelizar"], ["smoothleft", "Suave ←"], ["hblur", "Desfoque"],
+  ["whip", "Chicote"], ["zoomblur", "Zoom com desfoque"], ["spin", "Giro"], ["glitch", "Glitch"], ["lightleak", "Luz vazando"],
 ];
 const TEXT_PRESETS = [
   { label: "Título", css: "font:900 18px 'Arial Black';color:#fff;-webkit-text-stroke:1px #000",
@@ -458,12 +459,19 @@ function syncStage(seek = false) {
     const zoomClip = S > 1 ? `inset(${iy - ty / S}px ${ix + tx / S}px ${iy + ty / S}px ${ix - tx / S}px)` : "none";
     let transform = `${orient(it)} ${shakeT} ${zoomT}`.replace(/\s+/g, " ").trim();
     media.style.filter = `${cssFilter(it)} ${svgFilter(l, it)}`.replace("none ", "").trim() || "none";
-    let opacity = 1, clip = "none";
+    let opacity = 1, clip = "none", tfilter = "";
     // transição de entrada
     if (e.overlap > 0 && T < e.start + e.overlap) {
       const p = (T - e.start) / e.overlap;
-      ({ opacity, transform, clip } = transitionStyle(it.transition?.type, p, transform));
+      ({ opacity, transform, clip, filter: tfilter } = transitionStyle(it.transition?.type, p, transform, mw));
     }
+    // transições próprias também mexem no vídeo que sai
+    const nx = L[i + 1];
+    if (nx && nx.overlap > 0 && T >= nx.start && T < nx.start + nx.overlap) {
+      const o = transitionOutStyle(nx.it.transition?.type, (T - nx.start) / nx.overlap, transform, mw);
+      if (o) ({ opacity, transform, clip, filter: tfilter } = o);
+    }
+    if (tfilter) media.style.filter = `${media.style.filter === "none" ? "" : media.style.filter} ${tfilter}`.trim();
     // fades para o preto
     const local = T - e.start, len = e.end - e.start;
     if (it.fade_in && local < it.fade_in) opacity *= local / it.fade_in;
@@ -493,6 +501,7 @@ function syncStage(seek = false) {
       display: "block", left: `${(it.x ?? 0.5) * 100}%`, top: `${(it.y ?? 0.5) * 100}%`,
       width: `${(it.scale ?? 0.4) * 100}%`, opacity: it.opacity ?? 1, zIndex: 50 + i,
       transform: `translate(-50%, -50%) ${overlayShake(it, T - s)} ${orient(it)}`,
+      mixBlendMode: CSS_BLEND[it.blend] || "normal",
     });
     l.media.style.filter = `${cssFilter(it)} ${svgFilter(l, it)}`.replace("none ", "").trim() || "none";
     l.media.style.objectViewBox = cropBox(it);
@@ -569,6 +578,28 @@ function overlayShake(it, t) {
   const [sx, sy] = shakeAt(t, amt);
   return `translate(${P.canvas.w * 0.03 * sx * K}px, ${P.canvas.w * 0.03 * sy * K}px)`;
 }
+// linha de alfa do feColorMatrix para o recorte de fundo (mesma ideia do chromakey/colorkey):
+// cores perto da cor-chave ficam transparentes, com uma faixa de suavidade
+function keyAlphaRow(it) {
+  const k = it.key || "";
+  if (!k) return null;
+  const isLum = k === "black" || k === "white";
+  const sim = clamp(+(it.key_sim ?? (isLum ? 0.12 : 0.3)), 0.01, 0.9);
+  const soft = Math.max(0.03, clamp(+(it.key_blend ?? 0.1), 0, 0.5) * 2);
+  if (isLum) {  // colorkey: transparente até a tolerância, rampa do tamanho da suavidade
+    const L = [0.2126, 0.7152, 0.0722], ls = Math.max(0.03, clamp(+(it.key_blend ?? 0.1), 0, 0.5));
+    if (k === "black") return [...L.map((v) => v / ls), 0, -sim / ls];
+    return [...L.map((v) => -v / ls), 0, (1 - sim) / ls];
+  }
+  const hex = (k === "custom" ? it.key_color : { green: "#00FF00", blue: "#0000FF" }[k]) || "#00FF00";
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const mean = (c[0] + c[1] + c[2]) / 3;
+  const v = c.map((x) => x - mean);
+  const kv = c[0] * v[0] + c[1] * v[1] + c[2] * v[2] || 1;
+  const th = 1 - sim;  // d = 1 na cor-chave, ~0 no cinza; transparente quando d > th
+  return [...v.map((x) => -x / kv / soft), 0, th / soft];
+}
+const CSS_BLEND = { screen: "screen", addition: "plus-lighter", lighten: "lighten", multiply: "multiply", darken: "darken", overlay: "overlay", difference: "difference" };
 function lookMatrix(it) {
   const look = FX?.looks.find((l) => l.id === it.look);
   if (!look) return null;
@@ -584,8 +615,9 @@ function svgFilter(l, it) {
   const isMain = l.track === "main";
   const blur = isMain ? fxv(it, "blur") : 0, glow = isMain ? fxv(it, "glow") : 0;
   const pixel = isMain ? fxv(it, "pixel") : 0, rgb = isMain ? fxv(it, "rgb") : 0;
-  if (!m && !blur && !glow && !pixel && !rgb) return "";
-  const key = JSON.stringify([m, blur, glow, pixel, rgb, K]);
+  const keyRow = l.track === "overlay" ? keyAlphaRow(it) : null;
+  if (!m && !blur && !glow && !pixel && !rgb && !keyRow) return "";
+  const key = JSON.stringify([m, blur, glow, pixel, rgb, K, keyRow]);
   l.fid = l.fid || uid("f");
   if (l.fxKey !== key) {
     l.fxKey = key;
@@ -600,6 +632,11 @@ function svgFilter(l, it) {
     const p = [];
     let cur = "SourceGraphic", n = 0;
     const next = () => `r${++n}`;
+    if (keyRow) {  // recorte de fundo: transparência calculada da cor (aproximação do chromakey)
+      const o = next();
+      p.push(`<feColorMatrix in="${cur}" type="matrix" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 ${keyRow.map((v) => +v.toFixed(4)).join(" ")}" result="${o}"/>`);
+      cur = o;
+    }
     if (m) {
       const vals = [...m[0].slice(0, 3), 0, m[0][3], ...m[1].slice(0, 3), 0, m[1][3], ...m[2].slice(0, 3), 0, m[2][3], 0, 0, 0, 1, 0];
       const o = next(); p.push(`<feColorMatrix in="${cur}" type="matrix" values="${vals.map((v) => +v.toFixed(5)).join(" ")}" result="${o}"/>`); cur = o;
@@ -710,8 +747,40 @@ function syncMedia(m, local, rate, seek, volume) {
     if (seek || Math.abs(m.currentTime - local) > 0.05) m.currentTime = local;
   }
 }
-function transitionStyle(type, p, transform) {
-  const out = { opacity: 1, transform, clip: "none" };
+// p vai de 0 a 1; mesmas curvas das expressões do fx.transition_expr
+function customTransition(type, p, transform, mw, entering) {
+  const s = Math.sin(Math.PI * p), q1 = 2 * p, q2 = 2 - 2 * p;
+  const out = { opacity: 1, transform, clip: "none", filter: "" };
+  const firstHalf = p < 0.5;
+  if (type === "lightleak") {
+    out.filter = `brightness(${1 + 0.35 * s}) sepia(${0.6 * s}) saturate(${1 + 0.5 * s})`;
+    if (entering) out.opacity = p;
+    return out;
+  }
+  if (entering === firstHalf) { out.opacity = 0; return out; }  // estas trocam de vídeo no meio
+  const q = entering ? q2 : q1;
+  if (type === "whip") {
+    out.transform = `translateX(${(entering ? 1 : -1) * 150 * q * q}%) ${transform}`;
+    out.filter = `blur(${0.05 * mw * s * 0.6}px)`;
+  } else if (type === "zoomblur") {
+    out.transform = `scale(${1 + 1.5 * q * q}) ${transform}`;
+    out.filter = `blur(${0.03 * mw * s}px)`;
+  } else if (type === "spin") {
+    out.transform = `rotate(${(entering ? -180 : 180) * q * q}deg) ${transform}`;
+  } else if (type === "glitch") {
+    const h = Math.abs(Math.sin(Math.floor(p * 16) * 78.233) * 43758.5453) % 1;
+    out.transform = `translateX(${(h - 0.5) * 25 * s}%) ${transform}`;
+    out.filter = `hue-rotate(${Math.round((h - 0.5) * 120 * s)}deg) saturate(${1 + s})`;
+  }
+  return out;
+}
+const CUSTOM_TR = new Set(["whip", "zoomblur", "spin", "glitch", "lightleak"]);
+function transitionOutStyle(type, p, transform, mw) {
+  return CUSTOM_TR.has(type) ? customTransition(type, p, transform, mw, false) : null;
+}
+function transitionStyle(type, p, transform, mw = 0) {
+  if (CUSTOM_TR.has(type)) return customTransition(type, p, transform, mw, true);
+  const out = { opacity: 1, transform, clip: "none", filter: "" };
   const shift = (x, y) => (out.transform = `translate(${x}%, ${y}%) ${transform}`);
   switch (type) {
     case "slideleft": case "smoothleft": shift((1 - p) * 100, 0); break;
@@ -1374,6 +1443,16 @@ function renderInspector() {
       h.push(group("Filtro de cor", `<div class="look-grid">${looks.map((l) =>
         `<button class="ghost ${(it.look || "") === l.id ? "on" : ""}" data-look="${l.id}">${esc(l.label)}</button>`).join("")}</div>
         ${it.look ? slider("Intensidade", "look_amt", 0, 1, 0.05, it.look_amt ?? 1, "", (v) => `${Math.round(v * 100)}%`) : ""}`));
+      if (track === "overlay") {
+        const kk = it.key || "";
+        h.push(group("Recorte de fundo", `${seg("", "key", FX.keys.map((x) => [x.id, x.label]), kk)}
+          ${kk === "custom" ? row2("Cor", `<input type="color" data-k="key_color" value="${esc(it.key_color || "#00FF00")}">`) : ""}
+          ${kk ? slider("Tolerância", "key_sim", 0.01, 0.6, 0.01, it.key_sim ?? (kk === "black" || kk === "white" ? 0.12 : 0.3)) +
+            slider("Suavidade", "key_blend", 0, 0.5, 0.01, it.key_blend ?? 0.1) +
+            `<p class="muted small">Fundo verde/azul de meme, ou tirar o preto/branco de efeitos (fogo, explosão, brilho). A prévia é aproximada; o vídeo final usa o recorte do ffmpeg.</p>` : ""}`));
+        h.push(group("Mesclagem", row2("Modo", `<select data-k="blend">${FX.blends.map((x) => `<option value="${x.id}" ${(it.blend || "") === x.id ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select>`) +
+          `<p class="muted small">"Tela" e "Somar" deixam só as partes claras (bom para efeitos em fundo preto); "Multiplicar" deixa só as escuras.</p>`));
+      }
       const effects = track === "main" ? FX.effects : FX.effects.filter((x) => x.id === "shake");
       h.push(group("Efeitos", effects.map((x) => slider(x.label, `fx_${x.id}`, 0, 1, 0.05, fxv(it, x.id), "", (v) => `${Math.round(v * 100)}%`)).join("") +
         (track === "overlay" ? `<p class="muted small">Na sobreposição só o tremor; os outros efeitos valem para o vídeo principal.</p>` : "") +
@@ -1483,6 +1562,11 @@ function bindInspector(box, it, track) {
   ["crop_l", "crop_r", "crop_t", "crop_b"].forEach((k) => liveInput(box, k, it, (v) => (it[k] = +(v / 100).toFixed(3))));
   liveInput(box, "rotate", it, (v) => (it.rotate = Math.round(v)));
   liveInput(box, "look_amt", it, set("look_amt", 2));
+  liveInput(box, "key_sim", it, set("key_sim", 2));
+  liveInput(box, "key_blend", it, set("key_blend", 2));
+  liveInput(box, "key_color", it, (v) => (it.key_color = v));
+  liveInput(box, "blend", it, (v) => (v ? (it.blend = v) : delete it.blend));
+  bindSeg(box, "key", (v) => commit(() => { if (v) it.key = v; else { delete it.key; delete it.key_sim; delete it.key_blend; } }));
   (FX?.effects || []).forEach((x) => liveInput(box, `fx_${x.id}`, it, (v) => {
     it.fx = { ...(it.fx || {}), [x.id]: +v.toFixed(2) };
     if (!it.fx[x.id]) delete it.fx[x.id];

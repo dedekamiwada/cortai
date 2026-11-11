@@ -289,7 +289,33 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
             continue
         overlap = layout[i - 1][2] - start
         trans = (it.get("transition") or {}).get("type", "none")
-        if overlap > 0.01 and trans in XFADE:
+        if overlap > 0.01 and trans in fx.CUT_TRANSITIONS:
+            # troca no meio da janela [off, off+d]: o anterior vai até off+d/2 (com o efeito na última
+            # metade) e este entra a partir do seu d/2 (com o efeito até d), como na prévia
+            h, off = overlap / 2, cur_len - overlap
+            graph.append(f"[{cur_v}]split=2[ca{i}][cb{i}]")
+            graph.append(f"[ca{i}]trim=0:{off:.4f},setpts=PTS-STARTPTS[pa{i}]")
+            graph.append(f"[cb{i}]trim={off:.4f}:{off + h:.4f},setpts=PTS-STARTPTS,{fx.cut_chain(trans, 'out', h, W, H)}[pb{i}]")
+            graph.append(f"[v{i}]split=2[na{i}][nb{i}]")
+            graph.append(f"[na{i}]trim={h:.4f}:{overlap:.4f},setpts=PTS-STARTPTS,{fx.cut_chain(trans, 'in', h, W, H)}[pc{i}]")
+            graph.append(f"[nb{i}]trim={overlap:.4f},setpts=PTS-STARTPTS[pd{i}]")
+            graph.append(f"[pa{i}][pb{i}][pc{i}][pd{i}]concat=n=4:v=1:a=0,settb=AVTB[vx{i}]")
+            graph.append(f"[{cur_a}][a{i}]acrossfade=d={overlap:.3f}[ax{i}]")
+            cur_len += length - overlap
+        elif overlap > 0.01 and trans == "lightleak":
+            off = cur_len - overlap
+            graph.append(f"[{cur_v}][v{i}]xfade=transition=fade:duration={overlap:.3f}:offset={off:.3f}[vf{i}]")
+            leak = out_dir / "luz.png"
+            if not leak.exists():
+                fx.leak_png(leak, W, H)
+            li = add_still(leak)
+            graph.append(f"[{li}:v]format=rgba,fade=t=in:st={off:.3f}:d={overlap / 2:.3f}:alpha=1,"
+                         f"fade=t=out:st={off + overlap / 2:.3f}:d={overlap / 2:.3f}:alpha=1[lk{i}]")
+            graph.append(f"[vf{i}][lk{i}]overlay=x='-w+(W+w)*(t-{off:.3f})/{overlap:.3f}':y=0:"
+                         f"enable='between(t,{off:.3f},{off + overlap:.3f})'[vx{i}]")
+            graph.append(f"[{cur_a}][a{i}]acrossfade=d={overlap:.3f}[ax{i}]")
+            cur_len += length - overlap
+        elif overlap > 0.01 and trans in XFADE:
             graph.append(f"[{cur_v}][v{i}]xfade=transition={XFADE[trans]}:duration={overlap:.3f}:"
                          f"offset={cur_len - overlap:.3f}[vx{i}]")
             graph.append(f"[{cur_a}][a{i}]acrossfade=d={overlap:.3f}[ax{i}]")
@@ -315,6 +341,9 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         b, c, s = float(it.get("brightness") or 0), float(it.get("contrast") or 1), float(it.get("saturation") or 1)
         if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3:
             ofx.insert(len(ofx) - 1, f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
+        key = fx.key_filter(it)
+        if key:  # recorte de fundo antes de mexer na cor, para comparar com a cor original
+            ofx.insert(len(ofx) - 1, key)
         m = fx.look_matrix(it)
         if m:
             fx.write_cube(m, out_dir / f"look-o{j}.cube")
@@ -330,8 +359,19 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         shake = fx.effect(it, "shake")
         xs = f"+{W * 0.03:.1f}*{fx.shake_expr('x', shake)}" if shake else ""
         ys = f"+{W * 0.03:.1f}*{fx.shake_expr('y', shake)}" if shake else ""
-        graph.append(f"[{cur_v}][o{j}]overlay=x='{x:.0f}-w/2{xs}':y='{y:.0f}-h/2{ys}':eof_action=pass:"
-                     f"enable='between(t,{start:.3f},{start + length:.3f})'[ov{j}]")
+        place = (f"x='{x:.0f}-w/2{xs}':y='{y:.0f}-h/2{ys}':eof_action=pass:"
+                 f"enable='between(t,{start:.3f},{start + length:.3f})'")
+        bm = fx.blend_mode(it)
+        if bm:
+            # mesclagem: a sobreposição vai para um quadro da cor neutra do modo (que não altera o
+            # vídeo de baixo) e o quadro inteiro é misturado por cima, em RGB
+            mode, neutral = bm
+            graph.append(f"color=c={neutral}:s={W}x{H}:r={fps}:d={total + 1:.3f},format=rgba[nb{j}]")
+            graph.append(f"[nb{j}][o{j}]overlay={place}:format=auto,format=gbrp[ol{j}]")
+            graph.append(f"[{cur_v}]format=gbrp[bb{j}]")
+            graph.append(f"[bb{j}][ol{j}]blend=all_mode={mode}:shortest=1,format=yuv420p,setsar=1[ov{j}]")
+        else:
+            graph.append(f"[{cur_v}][o{j}]overlay={place}[ov{j}]")
         cur_v = f"ov{j}"
         vol = 0.0 if it.get("mute") else float(it.get("volume", 0.0))
         if a.get("has_audio") and vol > 0:
