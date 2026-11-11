@@ -6,7 +6,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import studio
+from . import fx, studio
 
 XFADE = {  # nome na interface -> transição do ffmpeg xfade
     "fade": "fade", "dissolve": "dissolve", "fadeblack": "fadeblack", "fadewhite": "fadewhite",
@@ -148,9 +148,9 @@ def text_ass(p: dict) -> str:
         karaoke = bool(t.get("words")) and (t.get("hl_mode") or "color") in ("color", "box") and count > 0
         if not karaoke:
             body = _rich(t, words, None, base, color) if t.get("kw_idx") else text.replace("\n", "\\N")
-            fx = f"\\fad({fade_in},{fade_out})" if fade_in or fade_out else ""
+            fad = f"\\fad({fade_in},{fade_out})" if fade_in or fade_out else ""
             lines.append(f"Dialogue: {i},{_ts(start)},{_ts(start + dur)},{style},,0,0,0,,"
-                         f"{{{''.join(tags)}{intro}{fx}}}{body}")
+                         f"{{{''.join(tags)}{intro}{fad}}}{body}")
             continue
         # destaque da palavra falada: um evento por palavra, como as legendas do Cortaí
         spans = word_spans(t, count)
@@ -165,9 +165,9 @@ def text_ass(p: dict) -> str:
                 continue
             first, last = k == 0, k == len(spans) - 1
             fi, fo = (fade_in if first else 0), (fade_out if last else 0)
-            fx = f"\\fad({fi},{fo})" if fi or fo else ""
+            fad = f"\\fad({fi},{fo})" if fi or fo else ""
             lines.append(f"Dialogue: {i},{_ts(start + a)},{_ts(start + b)},{style},,0,0,0,,"
-                         f"{{{''.join(tags)}{intro if first else ''}{fx}}}{_rich(t, words, k, base, color)}")
+                         f"{{{''.join(tags)}{intro if first else ''}{fad}}}{_rich(t, words, k, base, color)}")
     return "\n".join(lines) + "\n"
 
 
@@ -225,6 +225,12 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
     graph: list[str] = []
     k = 0
 
+    def add_still(path: Path) -> int:  # imagem parada gerada na exportação (ex.: máscara da vinheta)
+        nonlocal k
+        inputs.extend(["-loop", "1", "-framerate", str(fps), "-t", f"{total + 1:.3f}", "-i", path.name])
+        k += 1
+        return k - 1
+
     def add_input(asset: dict, start: float, length: float) -> int:
         nonlocal k
         if asset["kind"] == "image":
@@ -246,26 +252,29 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         crop = _crop(it)
         chain = f"[{idx}:v]setpts=(PTS-STARTPTS)/{speed:.4f},fps={fps},format=yuv420p{',' + crop if crop else ''}[r{i}];"
         chain += _fit_chain(f"r{i}", f"f{i}", it, W, H, bgc) + ";"
+        b, c, s = float(it.get("brightness") or 0), float(it.get("contrast") or 1), float(it.get("saturation") or 1)
+        eq = f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}" \
+            if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3 else "null"
+        chain += f"[f{i}]{eq}[e{i}];"
+        # filtro de cor e efeitos (tremor, vinheta...) sobre o quadro encaixado
+        chain += fx.main_fx(f"e{i}", f"g{i}", it, W, H, f"m{i}", out_dir, add_still) + ";"
         # espelhar e girar valem sobre o quadro já encaixado (igual à prévia)
         post = _flips(it)
         ang = _angle(it)
         if ang:
             post.append(f"rotate={ang:.3f}*PI/180:ow={W}:oh={H}:c={bgc}")
-        b, c, s = float(it.get("brightness") or 0), float(it.get("contrast") or 1), float(it.get("saturation") or 1)
-        if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3:
-            post.append(f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
         fi, fo = float(it.get("fade_in") or 0), float(it.get("fade_out") or 0)
         if fi > 0:
             post.append(f"fade=t=in:st=0:d={fi:.2f}")
         if fo > 0:
             post.append(f"fade=t=out:st={max(0, length - fo):.2f}:d={fo:.2f}")
         post += ["setsar=1", "format=yuv420p", "settb=AVTB"]
-        chain += f"[f{i}]{','.join(post)}[v{i}]"
+        chain += f"[g{i}]{','.join(post)}[v{i}]"
         graph.append(chain)
 
         vol = 0.0 if it.get("mute") else float(it.get("volume", 1.0))
         if a.get("has_audio") and vol > 0:
-            afx = ["asetpts=PTS-STARTPTS", _atempo(speed), f"volume={vol:.3f}"]
+            afx = ["asetpts=PTS-STARTPTS", _atempo(speed), f"volume={vol:.3f}", *fx.voice_chain(it)]
             if fi > 0:
                 afx.append(f"afade=t=in:st=0:d={fi:.2f}")
             if fo > 0:
@@ -302,25 +311,33 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         ow = _even(W * max(0.05, min(2.0, float(it.get("scale") or 0.4))))
         op = max(0.0, min(1.0, float(it.get("opacity", 1.0))))
         crop = _crop(it)
-        fx = [f"setpts=PTS-STARTPTS+{start:.3f}/TB", *([crop] if crop else []), f"scale={ow}:-2", "format=rgba"]
+        ofx = [f"setpts=PTS-STARTPTS+{start:.3f}/TB", *([crop] if crop else []), f"scale={ow}:-2", "format=rgba"]
         b, c, s = float(it.get("brightness") or 0), float(it.get("contrast") or 1), float(it.get("saturation") or 1)
         if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3:
-            fx.insert(len(fx) - 1, f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
-        fx += _flips(it)
+            ofx.insert(len(ofx) - 1, f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
+        m = fx.look_matrix(it)
+        if m:
+            fx.write_cube(m, out_dir / f"look-o{j}.cube")
+            ofx.insert(len(ofx) - 1, f"lut3d=file=look-o{j}.cube:interp=trilinear")
+        ofx += _flips(it)
         ang = _angle(it)
         if ang:  # o quadro cresce para caber a imagem girada; o centro continua no mesmo ponto
-            fx.append(f"rotate={ang:.3f}*PI/180:ow=rotw({ang:.3f}*PI/180):oh=roth({ang:.3f}*PI/180):c=none")
+            ofx.append(f"rotate={ang:.3f}*PI/180:ow=rotw({ang:.3f}*PI/180):oh=roth({ang:.3f}*PI/180):c=none")
         if op < 0.999:
-            fx.append(f"colorchannelmixer=aa={op:.3f}")
-        graph.append(f"[{idx}:v]{','.join(fx)}[o{j}]")
+            ofx.append(f"colorchannelmixer=aa={op:.3f}")
+        graph.append(f"[{idx}:v]{','.join(ofx)}[o{j}]")
         x, y = float(it.get("x", 0.5)) * W, float(it.get("y", 0.5)) * H
-        graph.append(f"[{cur_v}][o{j}]overlay=x={x:.0f}-w/2:y={y:.0f}-h/2:eof_action=pass:"
+        shake = fx.effect(it, "shake")
+        xs = f"+{W * 0.03:.1f}*{fx.shake_expr('x', shake)}" if shake else ""
+        ys = f"+{W * 0.03:.1f}*{fx.shake_expr('y', shake)}" if shake else ""
+        graph.append(f"[{cur_v}][o{j}]overlay=x='{x:.0f}-w/2{xs}':y='{y:.0f}-h/2{ys}':eof_action=pass:"
                      f"enable='between(t,{start:.3f},{start + length:.3f})'[ov{j}]")
         cur_v = f"ov{j}"
         vol = 0.0 if it.get("mute") else float(it.get("volume", 0.0))
         if a.get("has_audio") and vol > 0:
             ms = int(start * 1000)
-            graph.append(f"[{idx}:a]asetpts=PTS-STARTPTS,volume={vol:.3f},{AUDIO_FMT},adelay={ms}|{ms}[om{j}]")
+            vfx = "".join(f"{f}," for f in fx.voice_chain(it))
+            graph.append(f"[{idx}:a]asetpts=PTS-STARTPTS,volume={vol:.3f},{vfx}{AUDIO_FMT},adelay={ms}|{ms}[om{j}]")
             mixes.append(f"om{j}")
 
     # ---- faixa de áudio (música, efeitos, narração)
@@ -335,15 +352,15 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         src_len = max(0.1, float(it["out"]) - float(it["in"]))
         length = src_len / speed
         idx = add_input(a, float(it["in"]), src_len)
-        fx = ["asetpts=PTS-STARTPTS", _atempo(speed), f"volume={float(it.get('volume', 1.0)):.3f}"]
+        afx = ["asetpts=PTS-STARTPTS", _atempo(speed), f"volume={float(it.get('volume', 1.0)):.3f}", *fx.voice_chain(it)]
         fi, fo = float(it.get("fade_in") or 0), float(it.get("fade_out") or 0)
         if fi > 0:
-            fx.append(f"afade=t=in:st=0:d={fi:.2f}")
+            afx.append(f"afade=t=in:st=0:d={fi:.2f}")
         if fo > 0:
-            fx.append(f"afade=t=out:st={max(0, length - fo):.2f}:d={fo:.2f}")
+            afx.append(f"afade=t=out:st={max(0, length - fo):.2f}:d={fo:.2f}")
         ms = int(start * 1000)
-        fx += [AUDIO_FMT, f"adelay={ms}|{ms}"]
-        graph.append(f"[{idx}:a]{','.join(x for x in fx if x)}[m{j}]")
+        afx += [AUDIO_FMT, f"adelay={ms}|{ms}"]
+        graph.append(f"[{idx}:a]{','.join(x for x in afx if x)}[m{j}]")
         mixes.append(f"m{j}")
 
     if mixes:

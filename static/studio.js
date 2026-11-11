@@ -368,6 +368,9 @@ function dropLayer(id) {
   if (!l) return;
   l.media?.pause?.();
   l.el.remove();
+  l.fxEl?.remove();
+  l.grainEl?.remove();
+  document.getElementById(`fx-${l.fid}`)?.remove();
   l.audio?.pause();
   delete layers[id];
 }
@@ -424,7 +427,7 @@ function syncStage(seek = false) {
     const l = layerFor("main", e.it);
     const media = l.media;
     const active = T >= e.start && T < e.end && assetOf(e.it).status === "ready";
-    if (!active) { hide(l); return; }
+    if (!active) { hide(l); [l.fxEl, l.grainEl].forEach((x) => x && (x.style.display = "none")); return; }
     const it = e.it, a = assetOf(it);
     media.style.display = "block";
     media.style.zIndex = 2 + i;
@@ -437,13 +440,24 @@ function syncStage(seek = false) {
     media.style.transformOrigin = "50% 50%";
     const z = fit === "fill" ? Math.max(1, it.zoom || 1) : 1;
     const mw = media.clientWidth, mh = media.clientHeight;
-    const tx = ((1 - z) * (it.pan_x || 0) * mw) / 2, ty = ((1 - z) * (it.pan_y || 0) * mh) / 2;
+    let tx = ((1 - z) * (it.pan_x || 0) * mw) / 2, ty = ((1 - z) * (it.pan_y || 0) * mh) / 2;
     const zoomT = z > 1 ? `translate(${tx}px, ${ty}px) scale(${z})` : "";
-    // recorta o que o zoom empurrou para fora do quadro antes de girar (a exportação faz o mesmo)
-    const ix = (mw / 2) * (1 - 1 / z), iy = (mh / 2) * (1 - 1 / z);
-    const zoomClip = z > 1 ? `inset(${iy - ty / z}px ${ix + tx / z}px ${iy + ty / z}px ${ix - tx / z}px)` : "none";
-    let transform = `${orient(it)} ${zoomT}`.trim();
-    media.style.filter = cssFilter(it);
+    // tremor: amplia 8% e move o recorte (mesma fórmula do crop da exportação)
+    const sh = fxv(it, "shake");
+    let S = z, shakeT = "";
+    if (sh) {
+      const [sx, sy] = shakeAt(T - e.start, sh), q = (FX?.shake_zoom || 1.08) - 1;
+      const dx = (-q / 2) * mw * sx, dy = (-q / 2) * mh * sy;
+      shakeT = `translate(${dx}px, ${dy}px) scale(${1 + q})`;
+      S = z * (1 + q);
+      tx = tx * (1 + q) + dx;
+      ty = ty * (1 + q) + dy;
+    }
+    // recorta o que o zoom/tremor empurrou para fora do quadro antes de girar (a exportação faz o mesmo)
+    const ix = (mw / 2) * (1 - 1 / S), iy = (mh / 2) * (1 - 1 / S);
+    const zoomClip = S > 1 ? `inset(${iy - ty / S}px ${ix + tx / S}px ${iy + ty / S}px ${ix - tx / S}px)` : "none";
+    let transform = `${orient(it)} ${shakeT} ${zoomT}`.replace(/\s+/g, " ").trim();
+    media.style.filter = `${cssFilter(it)} ${svgFilter(l, it)}`.replace("none ", "").trim() || "none";
     let opacity = 1, clip = "none";
     // transição de entrada
     if (e.overlap > 0 && T < e.start + e.overlap) {
@@ -457,6 +471,7 @@ function syncStage(seek = false) {
     media.style.opacity = opacity;
     media.style.transform = transform;
     media.style.clipPath = clip !== "none" ? clip : zoomClip;
+    syncFxOverlay(l, it, 2 + i, opacity, orient(it));
     if (fit === "blur" && a.poster && i === L.findIndex((x) => T >= x.start && T < x.end)) {
       blurBg.style.display = "block";
       blurBg.style.backgroundImage = `url('/media/${a.poster}')`;
@@ -476,9 +491,10 @@ function syncStage(seek = false) {
     if (!(T >= s && T < en) || assetOf(it).status !== "ready") { hide(l); return; }
     Object.assign(l.el.style, {
       display: "block", left: `${(it.x ?? 0.5) * 100}%`, top: `${(it.y ?? 0.5) * 100}%`,
-      width: `${(it.scale ?? 0.4) * 100}%`, opacity: it.opacity ?? 1, zIndex: 50 + i, filter: cssFilter(it),
-      transform: `translate(-50%, -50%) ${orient(it)}`,
+      width: `${(it.scale ?? 0.4) * 100}%`, opacity: it.opacity ?? 1, zIndex: 50 + i,
+      transform: `translate(-50%, -50%) ${overlayShake(it, T - s)} ${orient(it)}`,
     });
+    l.media.style.filter = `${cssFilter(it)} ${svgFilter(l, it)}`.replace("none ", "").trim() || "none";
     l.media.style.objectViewBox = cropBox(it);
     l.el.classList.toggle("sel", sel?.id === it.id);
     if (l.media.tagName === "VIDEO") syncMedia(l.media, it.in + (T - s), 1, seek, it.mute ? 0 : it.volume ?? 0);
@@ -540,6 +556,125 @@ function hide(l) {
   if (l.media && !l.media.paused) l.media.pause?.();
 }
 // cortar (object-view-box recorta a mídia antes do object-fit, como o crop antes do encaixe)
+// ================================================================ filtros e efeitos (mesmas contas do fx.py)
+let FX = null;
+api("/api/studio/fx").then((c) => { FX = c; if (P) { renderInspector(); syncStage(true); } }).catch(() => {});
+const fxv = (it, k) => clamp(+((it.fx || {})[k]) || 0, 0, 1);
+function shakeAt(t, amt) {
+  return [amt * (0.6 * Math.sin(t * 23 + 1) + 0.4 * Math.sin(t * 41)), amt * (0.6 * Math.sin(t * 31) + 0.4 * Math.sin(t * 47 + 2))];
+}
+function overlayShake(it, t) {
+  const amt = fxv(it, "shake");
+  if (!amt) return "";
+  const [sx, sy] = shakeAt(t, amt);
+  return `translate(${P.canvas.w * 0.03 * sx * K}px, ${P.canvas.w * 0.03 * sy * K}px)`;
+}
+function lookMatrix(it) {
+  const look = FX?.looks.find((l) => l.id === it.look);
+  if (!look) return null;
+  const amt = clamp(it.look_amt ?? 1, 0, 1);
+  if (amt < 0.01) return null;
+  const id = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]];
+  return look.matrix.map((row, i) => row.map((v, j) => id[i][j] + amt * (v - id[i][j])));
+}
+let svgDefs = null;
+// um <filter> SVG por camada: filtro de cor, desfoque, brilho, pixelado e separação RGB
+function svgFilter(l, it) {
+  const m = lookMatrix(it);
+  const isMain = l.track === "main";
+  const blur = isMain ? fxv(it, "blur") : 0, glow = isMain ? fxv(it, "glow") : 0;
+  const pixel = isMain ? fxv(it, "pixel") : 0, rgb = isMain ? fxv(it, "rgb") : 0;
+  if (!m && !blur && !glow && !pixel && !rgb) return "";
+  const key = JSON.stringify([m, blur, glow, pixel, rgb, K]);
+  l.fid = l.fid || uid("f");
+  if (l.fxKey !== key) {
+    l.fxKey = key;
+    if (!svgDefs) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("width", "0"); svg.setAttribute("height", "0");
+      svg.style.position = "absolute";
+      svgDefs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+      svg.appendChild(svgDefs);
+      document.body.appendChild(svg);
+    }
+    const p = [];
+    let cur = "SourceGraphic", n = 0;
+    const next = () => `r${++n}`;
+    if (m) {
+      const vals = [...m[0].slice(0, 3), 0, m[0][3], ...m[1].slice(0, 3), 0, m[1][3], ...m[2].slice(0, 3), 0, m[2][3], 0, 0, 0, 1, 0];
+      const o = next(); p.push(`<feColorMatrix in="${cur}" type="matrix" values="${vals.map((v) => +v.toFixed(5)).join(" ")}" result="${o}"/>`); cur = o;
+    }
+    if (blur) { const o = next(); p.push(`<feGaussianBlur in="${cur}" stdDeviation="${blur * 25 * K}" edgeMode="duplicate" result="${o}"/>`); cur = o; }
+    if (glow) {
+      const b = next(), sc = next(), o = next();
+      p.push(`<feGaussianBlur in="${cur}" stdDeviation="${20 * K}" result="${b}"/>`,
+        `<feBlend in="${cur}" in2="${b}" mode="screen" result="${sc}"/>`,
+        `<feComposite in="${cur}" in2="${sc}" operator="arithmetic" k1="0" k2="${1 - glow}" k3="${glow}" k4="0" result="${o}"/>`);
+      cur = o;
+    }
+    if (pixel) {
+      const b = Math.max(2, (2 + pixel * 38) * K), h = b / 2;
+      const fl = next(), tile = next(), grid = next(), dots = next(), o = next();
+      p.push(`<feFlood x="${h}" y="${h}" width="1" height="1" result="${fl}"/>`,
+        `<feComposite in="${fl}" width="${b}" height="${b}" result="${tile}"/>`,
+        `<feTile in="${tile}" result="${grid}"/>`,
+        `<feComposite in="${cur}" in2="${grid}" operator="in" result="${dots}"/>`,
+        `<feMorphology in="${dots}" operator="dilate" radius="${h}" result="${o}"/>`);
+      cur = o;
+    }
+    if (rgb) {
+      const d = Math.max(1, Math.round(rgb * 24)) * K;
+      const r = next(), g = next(), bl = next(), ro = next(), bo = next(), rg = next(), o = next();
+      p.push(`<feColorMatrix in="${cur}" type="matrix" values="1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0" result="${r}"/>`,
+        `<feColorMatrix in="${cur}" type="matrix" values="0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 0" result="${g}"/>`,
+        `<feColorMatrix in="${cur}" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 1 0" result="${bl}"/>`,
+        `<feOffset in="${r}" dx="${-d}" result="${ro}"/>`, `<feOffset in="${bl}" dx="${d}" result="${bo}"/>`,
+        `<feBlend in="${ro}" in2="${g}" mode="screen" result="${rg}"/>`, `<feBlend in="${rg}" in2="${bo}" mode="screen" result="${o}"/>`);
+      cur = o;
+    }
+    let el = document.getElementById(`fx-${l.fid}`);
+    if (!el) { el = document.createElementNS("http://www.w3.org/2000/svg", "filter"); el.id = `fx-${l.fid}`; svgDefs.appendChild(el); }
+    el.setAttribute("color-interpolation-filters", "sRGB");
+    el.setAttribute("x", "0"); el.setAttribute("y", "0"); el.setAttribute("width", "100%"); el.setAttribute("height", "100%");
+    el.innerHTML = p.join("");
+  }
+  return `url(#fx-${l.fid})`;
+}
+let grainUrl = null;
+function grainTexture() {
+  if (grainUrl) return grainUrl;
+  const c = document.createElement("canvas");
+  c.width = c.height = 160;
+  const ctx = c.getContext("2d"), img = ctx.createImageData(160, 160);
+  for (let i = 0; i < img.data.length; i += 4) { const v = Math.random() * 255; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255; }
+  ctx.putImageData(img, 0, 0);
+  return (grainUrl = c.toDataURL());
+}
+// vinheta e grão: camadas por cima do vídeo (somem junto com ele)
+function syncFxOverlay(l, it, z, opacity, orientT) {
+  const vig = fxv(it, "vignette"), grain = fxv(it, "grain");
+  const layer = (key, cls, on) => {
+    if (!on) { if (l[key]) l[key].style.display = "none"; return null; }
+    if (!l[key]) {
+      l[key] = document.createElement("div");
+      l[key].className = `fxlayer ${cls}`;
+      l.el.after(l[key]);
+    }
+    Object.assign(l[key].style, { display: "block", zIndex: z, transform: orientT || "none" });
+    return l[key];
+  };
+  const v = layer("fxEl", "vig", vig);
+  if (v) {
+    v.style.opacity = opacity;
+    v.style.backgroundImage = `radial-gradient(ellipse farthest-corner at 50% 50%, rgba(0,0,0,0) ${(FX?.vignette_start ?? 0.35) * 100}%, rgba(0,0,0,${vig}) 100%)`;
+  }
+  const g = layer("grainEl", "grain", grain);
+  if (g) {
+    g.style.opacity = opacity * grain * 0.7;
+    g.style.backgroundImage = `url(${grainTexture()})`;
+    g.style.backgroundPosition = `${Math.floor(Math.random() * 160)}px ${Math.floor(Math.random() * 160)}px`;
+  }
+}
 function textShadowCss(it, k) {
   if (!it.shadow) return "none";
   const d = (it.shadow_d ?? 6) * k;
@@ -1119,6 +1254,24 @@ async function freezeFrame() {
   renderAssets();
   pollAssets();
 }
+let voiceAudio = null;
+async function previewVoice(track, it, btn) {
+  const [s] = spanOf(track, it);
+  const local = clamp(T - s, 0, Math.max(0, spanOf(track, it)[1] - s - 0.5));
+  const src = +(it.in + local * (track === "overlay" ? 1 : it.speed || 1)).toFixed(3);
+  btn.disabled = true;
+  btn.textContent = "Preparando…";
+  try {
+    await flushSave();
+    const r = await sendJSON("POST", `/api/studio/projects/${P.id}/audio-preview`, { track, id: it.id, src });
+    stopPlayback();
+    voiceAudio?.pause();
+    voiceAudio = new Audio(r.url);
+    voiceAudio.play().catch(() => {});
+  } catch (ex) { toast(`Não deu para ouvir: ${ex.message}`); }
+  btn.disabled = false;
+  btn.textContent = "▶ Ouvir 6 s com o efeito";
+}
 let toastTimer = null;
 function toast(msg) {
   let el = $("#st-toast");
@@ -1216,6 +1369,16 @@ function renderInspector() {
       h.push(group("Posição", `${slider("X", "x", 0, 1, 0.005, it.x ?? 0.5)}${slider("Y", "y", 0, 1, 0.005, it.y ?? 0.5)}
         ${slider("Tamanho", "scale", 0.05, 1.5, 0.01, it.scale ?? 0.4)}${slider("Opacidade", "opacity", 0, 1, 0.01, it.opacity ?? 1)}`));
     }
+    if (track !== "audio" && a.kind !== "audio" && FX) {
+      const looks = [{ id: "", label: "Nenhum" }, ...FX.looks];
+      h.push(group("Filtro de cor", `<div class="look-grid">${looks.map((l) =>
+        `<button class="ghost ${(it.look || "") === l.id ? "on" : ""}" data-look="${l.id}">${esc(l.label)}</button>`).join("")}</div>
+        ${it.look ? slider("Intensidade", "look_amt", 0, 1, 0.05, it.look_amt ?? 1, "", (v) => `${Math.round(v * 100)}%`) : ""}`));
+      const effects = track === "main" ? FX.effects : FX.effects.filter((x) => x.id === "shake");
+      h.push(group("Efeitos", effects.map((x) => slider(x.label, `fx_${x.id}`, 0, 1, 0.05, fxv(it, x.id), "", (v) => `${Math.round(v * 100)}%`)).join("") +
+        (track === "overlay" ? `<p class="muted small">Na sobreposição só o tremor; os outros efeitos valem para o vídeo principal.</p>` : "") +
+        `<div class="insp-actions"><button class="ghost" data-act="resetfx">Tirar efeitos</button></div>`));
+    }
     if (track !== "audio" && a.kind !== "audio") {
       const pct = (k) => +((it[k] || 0) * 100).toFixed(1);
       h.push(group("Cortar, espelhar e girar", `${slider("Corte ←", "crop_l", 0, 45, 1, pct("crop_l"), "%")}
@@ -1233,7 +1396,13 @@ function renderInspector() {
     }
     if (a.has_audio || track === "audio") {
       h.push(group("Áudio", `${slider("Volume", "volume", 0, 2, 0.01, it.volume ?? (track === "overlay" ? 0 : 1), "", (v) => `${Math.round(v * 100)}%`)}
-        ${track !== "audio" ? row2("", `<label class="check"><input type="checkbox" data-k="mute" ${it.mute ? "checked" : ""}> Sem som</label>`) : ""}`));
+        ${row2("", `<label class="check"><input type="checkbox" data-k="mute" ${it.mute ? "checked" : ""}> Sem som</label>`)}`));
+      if (FX) {
+        h.push(group("Voz", `${row2("", `<label class="check"><input type="checkbox" data-k="voice_clean" ${it.voice_clean ? "checked" : ""}> Limpar voz (tira ruído e nivela o volume)</label>`)}
+          ${row2("Efeito", `<select data-k="voice_fx">${FX.voices.map((v) => `<option value="${v.id}" ${(it.voice_fx || "") === v.id ? "selected" : ""}>${esc(v.label)}</option>`).join("")}</select>`)}
+          <div class="insp-actions"><button class="secondary" data-act="voiceprev">▶ Ouvir 6 s com o efeito</button></div>
+          <p class="muted small">A prévia normal toca o som original; a limpeza e o efeito entram na exportação e no botão acima.</p>`));
+      }
     }
     if (track === "main" || track === "audio") {
       h.push(group(track === "main" ? "Fade (preto/silêncio)" : "Fade do áudio",
@@ -1313,6 +1482,17 @@ function bindInspector(box, it, track) {
     "fade_in", "fade_out", "zoom", "pan_x", "pan_y", "stroke_w", "size", "hl", "kw_color"].forEach((k) => liveInput(box, k, it, set(k)));
   ["crop_l", "crop_r", "crop_t", "crop_b"].forEach((k) => liveInput(box, k, it, (v) => (it[k] = +(v / 100).toFixed(3))));
   liveInput(box, "rotate", it, (v) => (it.rotate = Math.round(v)));
+  liveInput(box, "look_amt", it, set("look_amt", 2));
+  (FX?.effects || []).forEach((x) => liveInput(box, `fx_${x.id}`, it, (v) => {
+    it.fx = { ...(it.fx || {}), [x.id]: +v.toFixed(2) };
+    if (!it.fx[x.id]) delete it.fx[x.id];
+    if (!Object.keys(it.fx).length) delete it.fx;
+  }));
+  liveInput(box, "voice_clean", it, (v) => (v ? (it.voice_clean = true) : delete it.voice_clean));
+  liveInput(box, "voice_fx", it, (v) => (v ? (it.voice_fx = v) : delete it.voice_fx));
+  $$("[data-look]", box).forEach((b) => (b.onclick = () => commit(() => {
+    if (b.dataset.look) { it.look = b.dataset.look; it.look_amt = it.look_amt ?? 1; } else { delete it.look; delete it.look_amt; }
+  })));
   liveInput(box, "shadow_d", it, set("shadow_d", 1));
   liveInput(box, "shadow_a", it, set("shadow_a", 2));
   liveInput(box, "shadow", it, (v) => (it.shadow = v));
@@ -1340,6 +1520,8 @@ function bindInspector(box, it, track) {
     if (act === "split") return splitAtPlayhead();
     if (act === "dup") return duplicateSelected();
     if (act === "del") return deleteSelected();
+    if (act === "resetfx") return commit(() => delete it.fx);
+    if (act === "voiceprev") return previewVoice(track, it, b);
     if (act === "fliph") return commit(() => (it.flip_h = !it.flip_h));
     if (act === "flipv") return commit(() => (it.flip_v = !it.flip_v));
     if (act === "resetgeo") return commit(() => ["crop_l", "crop_r", "crop_t", "crop_b", "flip_h", "flip_v", "rotate"].forEach((k) => delete it[k]));

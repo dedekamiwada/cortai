@@ -11,7 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import captions, jobs, paths, picker, studio, studio_render, styles
+from . import captions, fx, jobs, paths, picker, studio, studio_render, styles
 
 app = FastAPI(title="Cortaí")
 jobs.load_existing()
@@ -364,6 +364,43 @@ async def studio_add_asset(pid: str, request: Request):
         return studio.add_asset(pid, path)
     except FileNotFoundError as exc:
         raise HTTPException(400, str(exc))
+
+
+@app.get("/api/studio/fx")
+def studio_fx():
+    """Filtros de cor (com as matrizes, para a prévia), efeitos e efeitos de voz."""
+    return fx.catalog()
+
+
+@app.post("/api/studio/projects/{pid}/audio-preview")
+async def studio_audio_preview(pid: str, request: Request):
+    """Ouve 6 s do áudio de um item com a limpeza/efeito de voz (o navegador não faz esses efeitos)."""
+    p = _project_or_404(pid)
+    body = await request.json()
+    track = str(body.get("track") or "")
+    it = next((x for x in p["tracks"].get(track, []) if x.get("id") == body.get("id")), None)
+    a = p["assets"].get(it.get("asset")) if it else None
+    if not it or not a or not a.get("has_audio"):
+        raise HTTPException(400, "esse item não tem áudio")
+    try:
+        src = max(0.0, float(body.get("src") or 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "tempo inválido") from None
+    out_dir = studio._pdir(pid) / "exports"
+    out_dir.mkdir(exist_ok=True)
+    name = f"previa-voz-{it['id']}.m4a"
+    vol = float(it.get("volume", 0.0 if track == "overlay" else 1.0) or 0) or 1.0
+    chain = [f"volume={vol:.3f}", *fx.voice_chain(it), studio_render.AUDIO_FMT]
+
+    def run() -> subprocess.CompletedProcess:
+        return subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{src:.3f}", "-t", "6", "-i", a["path"], "-vn",
+                               "-af", ",".join(chain), "-c:a", "aac", "-b:a", "160k", name],
+                              cwd=out_dir, capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+    r = await run_in_threadpool(run)
+    if r.returncode != 0:
+        raise HTTPException(500, (r.stderr or "ffmpeg falhou").strip()[-400:])
+    return {"url": f"/media/_studio/{pid}/exports/{name}?v={uuid.uuid4().hex[:6]}"}
 
 
 @app.post("/api/studio/projects/{pid}/freeze")

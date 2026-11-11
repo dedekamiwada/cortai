@@ -138,3 +138,8 @@ body.studio-editing { overflow: hidden; }
   transition: opacity .15s, transform .15s; z-index: 1000; }
 .st-toast.on { opacity: 1; transform: translate(-50%, 0); }
 .insp-actions button.on { color: var(--accent); border-color: var(--accent); }
+.stage .fxlayer { position: absolute; inset: 0; pointer-events: none; display: none; }
+.stage .fxlayer.grain { mix-blend-mode: overlay; background-size: 160px 160px; }
+.look-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px; }
+.look-grid button { padding: 6px 4px; font-size: 12px; }
+.look-grid button.on { color: var(--accent); border-color: var(--accent); }
