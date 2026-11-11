@@ -366,6 +366,36 @@ async def studio_add_asset(pid: str, request: Request):
         raise HTTPException(400, str(exc))
 
 
+@app.post("/api/studio/projects/{pid}/freeze")
+async def studio_freeze(pid: str, request: Request):
+    """Congelar quadro: salva o quadro do vídeo no tempo pedido como imagem do projeto."""
+    p = _project_or_404(pid)
+    body = await request.json()
+    a = p["assets"].get(str(body.get("asset") or ""))
+    if not a or a.get("kind") != "video":
+        raise HTTPException(400, "escolha um vídeo da faixa principal")
+    try:
+        t = max(0.0, float(body.get("t") or 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "tempo inválido") from None
+    dest = studio._pdir(pid) / "uploads"
+    dest.mkdir(exist_ok=True)
+    stem = "".join(ch for ch in Path(a["name"]).stem if ch.isalnum() or ch in " -_")[:40].strip() or "video"
+    out = dest / f"congelado-{stem}-{t:.2f}s.png"
+
+    def grab() -> None:
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", a["path"], "-frames:v", "1",
+                        "-update", "1", str(out)], capture_output=True)
+        if not out.is_file():  # perto do fim do arquivo: pega o último quadro disponível
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-sseof", "-0.2", "-i", a["path"], "-update", "1",
+                            str(out)], capture_output=True)
+
+    await run_in_threadpool(grab)
+    if not out.is_file():
+        raise HTTPException(500, "não consegui extrair o quadro desse ponto do vídeo")
+    return studio.add_asset(pid, out)
+
+
 @app.delete("/api/studio/projects/{pid}/assets/{aid}")
 def studio_delete_asset(pid: str, aid: str):
     def drop(p):

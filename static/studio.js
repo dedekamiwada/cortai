@@ -42,6 +42,18 @@ const TEXT_PRESETS = [
     props: { text: "QUANDO O JOGO TRAVA", font: "Impact", size: 100, color: "#FFFFFF", stroke: "#000000", stroke_w: 6, y: 0.12 } },
   { label: "Neon", css: "font:900 18px 'Arial Black';color:#39E75F;-webkit-text-stroke:1px #062",
     props: { text: "GG", font: "Arial Black", size: 150, color: "#39E75F", stroke: "#003311", stroke_w: 6, anim: "pop" } },
+  { label: "Sombra", css: "font:900 18px 'Arial Black';color:#fff;text-shadow:2px 2px 0 rgba(0,0,0,.85)",
+    props: { text: "SEM CONTORNO", font: "Arial Black", size: 104, color: "#FFFFFF", stroke_w: 0, shadow: "#000000", shadow_d: 8, shadow_a: 0.85, anim: "pop" } },
+  { label: "Gamer", css: "font:400 20px Impact;color:#FFD400;-webkit-text-stroke:1px #000;text-shadow:2px 2px 0 #7A00FF",
+    props: { text: "CLUTCH!", font: "Impact", size: 140, color: "#FFD400", stroke: "#000000", stroke_w: 7, shadow: "#7A00FF", shadow_d: 10, shadow_a: 1, anim: "zoom" } },
+  { label: "Alerta", css: "font:900 15px 'Arial Black';color:#fff;background:#E10600;padding:2px 6px;border-radius:4px",
+    props: { text: "ATENÇÃO", font: "Arial Black", size: 90, color: "#FFFFFF", bg: "#E10600", shadow: "#000000", shadow_d: 6, shadow_a: 0.6, anim: "pop", y: 0.2 } },
+  { label: "TikTok", css: "font:900 14px 'Arial Black';color:#fff;-webkit-text-stroke:1px #000;text-shadow:1px 1px 0 rgba(0,0,0,.6)",
+    props: { text: "legenda estilo tiktok", font: "Arial Black", size: 76, color: "#FFFFFF", stroke: "#000000", stroke_w: 6, shadow: "#000000", shadow_d: 4, shadow_a: 0.6, y: 0.72 } },
+  { label: "Retrô", css: "font:900 18px Georgia;color:#FF8A00;-webkit-text-stroke:1px #2B0A3D;text-shadow:3px 3px 0 #2B0A3D",
+    props: { text: "ANOS 80", font: "Georgia", size: 120, color: "#FF8A00", stroke: "#2B0A3D", stroke_w: 6, shadow: "#2B0A3D", shadow_d: 12, shadow_a: 1, anim: "slide" } },
+  { label: "Sussurro", css: "font:italic 400 16px 'Trebuchet MS';color:#fff;text-shadow:1px 1px 2px #000",
+    props: { text: "(baixinho)", font: "Trebuchet MS", size: 64, color: "#FFFFFF", stroke_w: 0, bold: false, italic: true, shadow: "#000000", shadow_d: 3, shadow_a: 0.9, anim: "fade", y: 0.62 } },
 ];
 
 let P = null;             // projeto aberto
@@ -419,9 +431,18 @@ function syncStage(seek = false) {
     const fit = it.fit || "fill";
     media.style.objectFit = fit === "fill" ? "cover" : "contain";
     media.style.objectPosition = `${50 + 50 * (it.pan_x || 0)}% ${50 + 50 * (it.pan_y || 0)}%`;
-    // o zoom amplia a partir do ponto da posição, como o recorte da exportação
-    media.style.transformOrigin = media.style.objectPosition;
-    let transform = fit === "fill" && (it.zoom || 1) > 1 ? `scale(${it.zoom})` : "";
+    media.style.objectViewBox = cropBox(it);
+    // o zoom amplia a partir do ponto da posição (como o recorte da exportação); espelhar e girar
+    // valem sobre o quadro já encaixado, em volta do centro
+    media.style.transformOrigin = "50% 50%";
+    const z = fit === "fill" ? Math.max(1, it.zoom || 1) : 1;
+    const mw = media.clientWidth, mh = media.clientHeight;
+    const tx = ((1 - z) * (it.pan_x || 0) * mw) / 2, ty = ((1 - z) * (it.pan_y || 0) * mh) / 2;
+    const zoomT = z > 1 ? `translate(${tx}px, ${ty}px) scale(${z})` : "";
+    // recorta o que o zoom empurrou para fora do quadro antes de girar (a exportação faz o mesmo)
+    const ix = (mw / 2) * (1 - 1 / z), iy = (mh / 2) * (1 - 1 / z);
+    const zoomClip = z > 1 ? `inset(${iy - ty / z}px ${ix + tx / z}px ${iy + ty / z}px ${ix - tx / z}px)` : "none";
+    let transform = `${orient(it)} ${zoomT}`.trim();
     media.style.filter = cssFilter(it);
     let opacity = 1, clip = "none";
     // transição de entrada
@@ -435,7 +456,7 @@ function syncStage(seek = false) {
     if (it.fade_out && local > len - it.fade_out) opacity *= Math.max(0, (len - local) / it.fade_out);
     media.style.opacity = opacity;
     media.style.transform = transform;
-    media.style.clipPath = clip;
+    media.style.clipPath = clip !== "none" ? clip : zoomClip;
     if (fit === "blur" && a.poster && i === L.findIndex((x) => T >= x.start && T < x.end)) {
       blurBg.style.display = "block";
       blurBg.style.backgroundImage = `url('/media/${a.poster}')`;
@@ -456,7 +477,9 @@ function syncStage(seek = false) {
     Object.assign(l.el.style, {
       display: "block", left: `${(it.x ?? 0.5) * 100}%`, top: `${(it.y ?? 0.5) * 100}%`,
       width: `${(it.scale ?? 0.4) * 100}%`, opacity: it.opacity ?? 1, zIndex: 50 + i, filter: cssFilter(it),
+      transform: `translate(-50%, -50%) ${orient(it)}`,
     });
+    l.media.style.objectViewBox = cropBox(it);
     l.el.classList.toggle("sel", sel?.id === it.id);
     if (l.media.tagName === "VIDEO") syncMedia(l.media, it.in + (T - s), 1, seek, it.mute ? 0 : it.volume ?? 0);
   });
@@ -484,6 +507,7 @@ function syncStage(seek = false) {
     st.color = it.color || "#fff";
     st.background = it.bg || "transparent";
     st.webkitTextStroke = it.bg ? "0" : `${(it.stroke_w ?? 5) * 2 * K}px ${it.stroke || "#000"}`;
+    st.textShadow = textShadowCss(it, K);
     st.paintOrder = "stroke fill";
     st.opacity = an.opacity;
     st.transform = `translate(-50%, calc(-50% + ${an.dy * P.canvas.h * K}px)) scale(${an.scale})`;
@@ -498,7 +522,7 @@ function syncStage(seek = false) {
     const [s, en] = spanOf("audio", it);
     if (!(T >= s && T < en) || assetOf(it).status !== "ready") { l.audio.pause(); return; }
     const local = T - s, len = en - s;
-    let vol = it.volume ?? 1;
+    let vol = it.mute ? 0 : it.volume ?? 1;
     if (it.fade_in && local < it.fade_in) vol *= local / it.fade_in;
     if (it.fade_out && local > len - it.fade_out) vol *= Math.max(0, (len - local) / it.fade_out);
     syncMedia(l.audio, it.in + local * (it.speed || 1), it.speed || 1, seek, vol);
@@ -514,6 +538,25 @@ function hide(l) {
   if (l.track === "overlay") l.el.style.display = "none";
   else l.el.style.display = "none";
   if (l.media && !l.media.paused) l.media.pause?.();
+}
+// cortar (object-view-box recorta a mídia antes do object-fit, como o crop antes do encaixe)
+function textShadowCss(it, k) {
+  if (!it.shadow) return "none";
+  const d = (it.shadow_d ?? 6) * k;
+  const h = it.shadow.replace("#", "");
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) || 0);
+  return `${d}px ${d}px 0 rgba(${r}, ${g}, ${b}, ${it.shadow_a ?? 0.8})`;
+}
+function cropBox(it) {
+  const v = (k) => clamp(+it[k] || 0, 0, 0.45) * 100;
+  const [l, r, t, b] = [v("crop_l"), v("crop_r"), v("crop_t"), v("crop_b")];
+  return l + r + t + b > 0.1 ? `inset(${t}% ${r}% ${b}% ${l}%)` : "none";
+}
+function orient(it) {
+  const parts = [];
+  if (+it.rotate) parts.push(`rotate(${+it.rotate}deg)`);
+  if (it.flip_h || it.flip_v) parts.push(`scale(${it.flip_h ? -1 : 1}, ${it.flip_v ? -1 : 1})`);
+  return parts.join(" ");
 }
 function cssFilter(it) {
   const b = 1 + (it.brightness || 0) * 1.4, c = it.contrast ?? 1, s = it.saturation ?? 1;
@@ -942,19 +985,179 @@ function duplicateSelected() {
     sel = { track: sel.track, id: copy.id };
   });
 }
+
+// ---- cortes rápidos: apagar antes/depois do cursor, apagar fechando o buraco, pular entre
+// cortes, mudo, copiar/colar e congelar quadro
+function itemAtPlayhead() {
+  const it = findItem();
+  if (it) { const [s, e] = spanOf(sel.track, it); if (T > s + 0.02 && T < e - 0.02) return { track: sel.track, it }; }
+  const m = mainLayout().find((x) => T > x.start + 0.02 && T < x.end - 0.02);
+  return m ? { track: "main", it: m.it } : null;
+}
+// "left" (Q) apaga do começo do item até o cursor; "right" (W) apaga do cursor até o fim
+function trimAtPlayhead(side) {
+  const target = itemAtPlayhead();
+  if (!target) return toast("Coloque o cursor em cima de um item (ou selecione um) para cortar");
+  const { track, it } = target;
+  const [s] = spanOf(track, it);
+  commit(() => {
+    sel = { track, id: it.id };
+    if (track === "text") {
+      const parts = splitRich(it, T - it.start);
+      if (side === "left") {
+        if (parts) Object.assign(it, parts.b);
+        it.dur = +(it.start + it.dur - T).toFixed(3);
+        it.start = +T.toFixed(3);
+      } else {
+        if (parts) Object.assign(it, parts.a);
+        it.dur = +(T - it.start).toFixed(3);
+      }
+      return;
+    }
+    const cut = +(it.in + (T - s) * (it.speed || 1)).toFixed(3);
+    if (side === "left") {
+      it.in = cut;
+      if (track !== "main") it.start = +T.toFixed(3);
+    } else it.out = cut;
+  });
+  // na faixa principal o buraco fecha sozinho: o cursor volta para o quadro que estava na tela
+  if (side === "left" && track === "main") setTime(s);
+}
+function rippleDelete() {
+  const it = findItem();
+  if (!it) return;
+  const track = sel.track;
+  if (track === "main") return deleteSelected();  // a faixa principal já é magnética
+  const [s, e] = spanOf(track, it);
+  const gap = e - s;
+  commit(() => {
+    P.tracks[track].splice(P.tracks[track].indexOf(it), 1);
+    P.tracks[track].forEach((x) => { if (x.start >= e - 0.001) x.start = +Math.max(0, x.start - gap).toFixed(3); });
+    sel = null;
+  });
+}
+function cutPoints() {
+  const pts = new Set([0, +totalDur().toFixed(3)]);
+  mainLayout().forEach((e) => { pts.add(+e.start.toFixed(3)); pts.add(+e.end.toFixed(3)); });
+  for (const k of ["overlay", "text", "audio"]) P.tracks[k].forEach((it) => spanOf(k, it).forEach((t) => pts.add(+t.toFixed(3))));
+  return [...pts].sort((a, b) => a - b);
+}
+function jumpCut(dir) {
+  stopPlayback();
+  const pts = cutPoints();
+  const t = dir < 0 ? pts.reverse().find((p) => p < T - 0.01) : pts.find((p) => p > T + 0.01);
+  if (t !== undefined) setTime(t);
+}
+function toggleMute() {
+  const it = findItem();
+  if (!it || sel.track === "text") return;
+  commit(() => (it.mute = !it.mute));
+  toast(it.mute ? "Sem som" : "Som ligado");
+}
+let clipboard = null;
+function copySelected() {
+  const it = findItem();
+  if (!it) return;
+  clipboard = { track: sel.track, item: JSON.parse(JSON.stringify(it)) };
+  toast("Copiado — Ctrl+V cola no cursor");
+}
+function pasteClipboard() {
+  if (!clipboard) return;
+  const { track } = clipboard;
+  if (track !== "text" && !P.assets[clipboard.item.asset]) return toast("A mídia desse item não está mais no projeto");
+  commit(() => {
+    const copy = JSON.parse(JSON.stringify(clipboard.item));
+    copy.id = uid(track === "text" ? "t" : "i");
+    if (track === "main") {
+      delete copy.transition;
+      const L = mainLayout();
+      const at = L.findIndex((x) => T < x.end - 0.001);
+      P.tracks.main.splice(at < 0 ? L.length : at + 1, 0, copy);
+    } else {
+      copy.start = +T.toFixed(3);
+      P.tracks[track].push(copy);
+    }
+    sel = { track, id: copy.id };
+  });
+}
+const FREEZE_SECONDS = 2;
+async function freezeFrame() {
+  const e = mainLayout().find((x) => T >= x.start && T < x.end);
+  if (!e) return toast("Coloque o cursor em cima de um vídeo da faixa principal");
+  const it = e.it;
+  if (assetOf(it).kind !== "video") return toast("Congelar quadro funciona em vídeo");
+  const src = +(it.in + (T - e.start) * (it.speed || 1)).toFixed(3);
+  const btn = $("#tl-freeze");
+  btn.disabled = true;
+  toast("Congelando o quadro…");
+  let asset;
+  try {
+    asset = await sendJSON("POST", `/api/studio/projects/${P.id}/freeze`, { asset: it.asset, t: src });
+  } catch (ex) {
+    btn.disabled = false;
+    return toast(`Não deu para congelar: ${ex.message}`);
+  }
+  btn.disabled = false;
+  P.assets[asset.id] = asset;
+  commit(() => {
+    // a imagem parada herda o enquadramento e a cor do vídeo, para o corte não "pular"
+    const still = { id: uid("i"), asset: asset.id, in: 0, out: FREEZE_SECONDS, speed: 1, volume: 1 };
+    for (const k of ["fit", "zoom", "pan_x", "pan_y", "brightness", "contrast", "saturation",
+      "crop_l", "crop_r", "crop_t", "crop_b", "flip_h", "flip_v", "rotate"]) if (it[k] !== undefined) still[k] = it[k];
+    const idx = P.tracks.main.indexOf(it);
+    if (T > e.start + 0.05 && T < e.end - 0.05) {
+      const rest = JSON.parse(JSON.stringify(it));
+      rest.id = uid("i");
+      rest.in = src;
+      it.out = src;
+      delete rest.transition;
+      P.tracks.main.splice(idx + 1, 0, still, rest);
+    } else if (T <= e.start + 0.05) P.tracks.main.splice(idx, 0, still);
+    else P.tracks.main.splice(idx + 1, 0, still);
+    sel = { track: "main", id: still.id };
+  });
+  renderAssets();
+  pollAssets();
+}
+let toastTimer = null;
+function toast(msg) {
+  let el = $("#st-toast");
+  if (!el) { el = document.createElement("div"); el.id = "st-toast"; el.className = "st-toast"; document.body.appendChild(el); }
+  el.textContent = msg;
+  el.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("on"), 2200);
+}
+
 $("#tl-split").onclick = splitAtPlayhead;
 $("#tl-del").onclick = deleteSelected;
 $("#tl-dup").onclick = duplicateSelected;
+$("#tl-freeze").onclick = freezeFrame;
+$("#tl-trim-l").onclick = () => trimAtPlayhead("left");
+$("#tl-trim-r").onclick = () => trimAtPlayhead("right");
 
 document.addEventListener("keydown", (e) => {
   if (!P || $("#editor-view").classList.contains("hidden") || e.target.matches("input, textarea, select") || $("#export-dlg").open) return;
   const k = e.key.toLowerCase();
-  if (e.ctrlKey && k === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); }
-  else if (e.ctrlKey && k === "y") { e.preventDefault(); redo(); }
-  else if (e.ctrlKey && k === "d") { e.preventDefault(); duplicateSelected(); }
-  else if (e.ctrlKey && k === "s") { e.preventDefault(); flushSave(); }
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && k === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if (ctrl && k === "y") { e.preventDefault(); redo(); }
+  else if (ctrl && k === "d") { e.preventDefault(); duplicateSelected(); }
+  else if (ctrl && k === "s") { e.preventDefault(); flushSave(); }
+  else if (ctrl && k === "c") { e.preventDefault(); copySelected(); }
+  else if (ctrl && k === "v") { e.preventDefault(); pasteClipboard(); }
+  else if (ctrl && k === "b") { e.preventDefault(); splitAtPlayhead(); }
+  else if (ctrl || e.altKey) return;
   else if (e.code === "Space") { e.preventDefault(); $("#play").click(); }
   else if (k === "s") splitAtPlayhead();
+  else if (k === "q") trimAtPlayhead("left");
+  else if (k === "w") trimAtPlayhead("right");
+  else if (k === "f") freezeFrame();
+  else if (k === "m") toggleMute();
+  else if (k === "n") { $("#tl-snap").checked = !$("#tl-snap").checked; toast($("#tl-snap").checked ? "Ímã ligado" : "Ímã desligado"); }
+  else if (k === "arrowup") { e.preventDefault(); jumpCut(-1); }
+  else if (k === "arrowdown") { e.preventDefault(); jumpCut(1); }
+  else if ((k === "delete" || k === "backspace") && e.shiftKey) rippleDelete();
   else if (k === "delete" || k === "backspace") deleteSelected();
   else if (k === "arrowleft") { stopPlayback(); setTime(T - (e.shiftKey ? 1 : 1 / P.canvas.fps)); }
   else if (k === "arrowright") { stopPlayback(); setTime(T + (e.shiftKey ? 1 : 1 / P.canvas.fps)); }
@@ -982,7 +1185,9 @@ function renderInspector() {
       ${row2("Cor", `<input type="color" data-k="color" value="${it.color || "#FFFFFF"}">`)}
       ${row2("Contorno", `<input type="color" data-k="stroke" value="${it.stroke || "#000000"}">`)}
       ${slider("Espessura", "stroke_w", 0, 20, 0.5, it.stroke_w ?? 5)}
-      ${row2("Fundo", `<label class="check"><input type="checkbox" data-k="bg_on" ${it.bg ? "checked" : ""}> caixa</label> <input type="color" data-k="bg" value="${it.bg || "#E8336B"}">`)}`));
+      ${row2("Fundo", `<label class="check"><input type="checkbox" data-k="bg_on" ${it.bg ? "checked" : ""}> caixa</label> <input type="color" data-k="bg" value="${it.bg || "#E8336B"}">`)}
+      ${row2("Sombra", `<label class="check"><input type="checkbox" data-k="shadow_on" ${it.shadow ? "checked" : ""}> sombra</label> <input type="color" data-k="shadow" value="${it.shadow || "#000000"}">`)}
+      ${it.shadow ? slider("Distância", "shadow_d", 0, 30, 0.5, it.shadow_d ?? 6) + slider("Opacidade", "shadow_a", 0, 1, 0.05, it.shadow_a ?? 0.8) : ""}`));
     if ((it.words || []).length) {
       h.push(group("Destaque da palavra falada", `${seg("", "hl_mode", [["none", "Nenhum"], ["color", "Cor"], ["box", "Marca-texto"]], it.hl_mode || "color")}
         ${row2("Cor", `<input type="color" data-k="hl" value="${esc(it.hl || "#FFE600")}">`)}
@@ -1012,6 +1217,15 @@ function renderInspector() {
         ${slider("Tamanho", "scale", 0.05, 1.5, 0.01, it.scale ?? 0.4)}${slider("Opacidade", "opacity", 0, 1, 0.01, it.opacity ?? 1)}`));
     }
     if (track !== "audio" && a.kind !== "audio") {
+      const pct = (k) => +((it[k] || 0) * 100).toFixed(1);
+      h.push(group("Cortar, espelhar e girar", `${slider("Corte ←", "crop_l", 0, 45, 1, pct("crop_l"), "%")}
+        ${slider("Corte →", "crop_r", 0, 45, 1, pct("crop_r"), "%")}${slider("Corte ↑", "crop_t", 0, 45, 1, pct("crop_t"), "%")}
+        ${slider("Corte ↓", "crop_b", 0, 45, 1, pct("crop_b"), "%")}
+        <div class="insp-actions"><button class="ghost ${it.flip_h ? "on" : ""}" data-act="fliph">↔ Espelhar</button>
+        <button class="ghost ${it.flip_v ? "on" : ""}" data-act="flipv">↕ Virar de cabeça</button></div>
+        ${slider("Rotação", "rotate", -180, 180, 1, it.rotate ?? 0, "°")}
+        ${seg("", "rotp", [["-90", "-90°"], ["0", "0°"], ["90", "90°"], ["180", "180°"]], String(it.rotate ?? 0))}
+        <div class="insp-actions"><button class="ghost" data-act="resetgeo">Restaurar</button></div>`));
       h.push(group("Ajustes de cor", `${slider("Brilho", "brightness", -0.5, 0.5, 0.01, it.brightness ?? 0)}
         ${slider("Contraste", "contrast", 0.5, 2, 0.01, it.contrast ?? 1)}${slider("Saturação", "saturation", 0, 3, 0.01, it.saturation ?? 1)}
         <div class="insp-actions"><button class="ghost" data-act="resetcolor">Restaurar cor</button>
@@ -1045,7 +1259,9 @@ function renderProjectInspector(box) {
     ${group("Cor de fundo", row2("Fundo", `<input type="color" data-k="bg" value="${c.bg}">`))}
     <p class="muted small">Duração: ${fmt(totalDur())} · ${c.w}×${c.h}<br>${P.tracks.main.length} vídeo(s), ${P.tracks.text.length} texto(s),
     ${P.tracks.overlay.length} sobreposição(ões), ${P.tracks.audio.length} áudio(s).</p>
-    <p class="muted small">Atalhos: espaço toca/pausa · S divide · Delete exclui · Ctrl+Z/Y desfaz/refaz · Ctrl+D duplica · ←/→ quadro a quadro (Shift = 1 s) · Ctrl+roda = zoom da timeline.</p>`;
+    <p class="muted small">Atalhos: espaço toca/pausa · S ou Ctrl+B divide · Q apaga do começo até o cursor · W apaga do cursor até o fim ·
+    F congela o quadro · Delete exclui (Shift+Delete fecha o buraco) · M sem som · N liga/desliga o ímã · ↑/↓ pula entre cortes ·
+    Ctrl+C/V copia e cola no cursor · Ctrl+Z/Y desfaz/refaz · Ctrl+D duplica · ←/→ quadro a quadro (Shift = 1 s) · Ctrl+roda = zoom da timeline.</p>`;
   bindSeg(box, "ratio", (v) => commit(() => {
     const dims = { "9:16": [1080, 1920], "16:9": [1920, 1080], "1:1": [1080, 1080], "4:5": [1080, 1350], "3:4": [1080, 1440] }[v];
     Object.assign(P.canvas, { ratio: v, w: dims[0], h: dims[1] });
@@ -1095,6 +1311,12 @@ function bindInspector(box, it, track) {
   const set = (k, round = 3) => (v) => (it[k] = typeof v === "number" ? +v.toFixed(round) : v);
   ["text", "font", "color", "stroke", "x", "y", "scale", "opacity", "brightness", "contrast", "saturation", "volume",
     "fade_in", "fade_out", "zoom", "pan_x", "pan_y", "stroke_w", "size", "hl", "kw_color"].forEach((k) => liveInput(box, k, it, set(k)));
+  ["crop_l", "crop_r", "crop_t", "crop_b"].forEach((k) => liveInput(box, k, it, (v) => (it[k] = +(v / 100).toFixed(3))));
+  liveInput(box, "rotate", it, (v) => (it.rotate = Math.round(v)));
+  liveInput(box, "shadow_d", it, set("shadow_d", 1));
+  liveInput(box, "shadow_a", it, set("shadow_a", 2));
+  liveInput(box, "shadow", it, (v) => (it.shadow = v));
+  liveInput(box, "shadow_on", it, (v) => (it.shadow = v ? it.shadow || "#000000" : ""));
   liveInput(box, "start", it, (v) => (it.start = Math.max(0, +v.toFixed(3))));
   liveInput(box, "dur", it, (v) => (it.dur = Math.max(0.2, +v.toFixed(3))));
   liveInput(box, "in", it, (v) => (it.in = clamp(+v.toFixed(3), 0, it.out - 0.1)));
@@ -1111,12 +1333,16 @@ function bindInspector(box, it, track) {
   bindSeg(box, "hl_mode", (v) => commit(() => (it.hl_mode = v)));
   bindSeg(box, "fit", (v) => commit(() => (it.fit = v)));
   bindSeg(box, "speedp", (v) => commit(() => (it.speed = +v)));
+  bindSeg(box, "rotp", (v) => commit(() => (it.rotate = +v)));
   bindSeg(box, "style", (v) => commit(() => (v === "b" ? (it.bold = it.bold === false) : (it.italic = !it.italic))));
   $$("[data-act]", box).forEach((b) => (b.onclick = () => {
     const act = b.dataset.act;
     if (act === "split") return splitAtPlayhead();
     if (act === "dup") return duplicateSelected();
     if (act === "del") return deleteSelected();
+    if (act === "fliph") return commit(() => (it.flip_h = !it.flip_h));
+    if (act === "flipv") return commit(() => (it.flip_v = !it.flip_v));
+    if (act === "resetgeo") return commit(() => ["crop_l", "crop_r", "crop_t", "crop_b", "flip_h", "flip_v", "rotate"].forEach((k) => delete it[k]));
     const looks = { resetcolor: [0, 1, 1], pb: [0, 1.1, 0], vivid: [0.03, 1.15, 1.6], cine: [-0.04, 1.2, 0.8] }[act];
     if (looks) commit(() => Object.assign(it, { brightness: looks[0], contrast: looks[1], saturation: looks[2] }));
   }));

@@ -132,3 +132,9 @@ body.studio-editing { overflow: hidden; }
 @media (max-width: 1100px) {
   .ed { grid-template-columns: 230px 1fr 250px; }
 }
+
+.st-toast { position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 12px); opacity: 0; pointer-events: none;
+  background: #111118; color: #fff; border: 1px solid #3a3a4d; border-radius: 10px; padding: 8px 14px; font-size: 13px;
+  transition: opacity .15s, transform .15s; z-index: 1000; }
+.st-toast.on { opacity: 1; transform: translate(-50%, 0); }
+.insp-actions button.on { color: var(--accent); border-color: var(--accent); }

@@ -124,6 +124,10 @@ def text_ass(p: dict) -> str:
         else:
             outline = f"\\3c{_ass_color(t.get('stroke') or '#000000')}\\bord{float(t.get('stroke_w', 5)):.1f}"
         tags.append(outline)
+        if t.get("shadow"):  # sombra projetada: distância em px do quadro e opacidade 0–1
+            d = max(0.0, min(40.0, float(t.get("shadow_d", 6) or 0)))
+            alpha = round((1 - max(0.0, min(1.0, float(t.get("shadow_a", 0.8))))) * 255)
+            tags.append(f"\\shad{d:.1f}\\4c{_ass_color(t['shadow'])}\\4a&H{alpha:02X}&")
         base = f"\\c{color}{outline}\\fscx100\\fscy100"
         anim = t.get("anim") or "none"
         fade_in, fade_out, intro = 0, 0, ""
@@ -165,6 +169,29 @@ def text_ass(p: dict) -> str:
             lines.append(f"Dialogue: {i},{_ts(start + a)},{_ts(start + b)},{style},,0,0,0,,"
                          f"{{{''.join(tags)}{intro if first else ''}{fx}}}{_rich(t, words, k, base, color)}")
     return "\n".join(lines) + "\n"
+
+
+def _crop(it: dict) -> str | None:
+    """Cortar bordas (frações de cada lado), antes de encaixar no quadro."""
+    l, r, t, b = (max(0.0, min(0.45, float(it.get(k) or 0))) for k in ("crop_l", "crop_r", "crop_t", "crop_b"))
+    if l + r + t + b < 1e-3:
+        return None
+    w, h = 1 - l - r, 1 - t - b
+    return f"crop=trunc(iw*{w:.4f}/2)*2:trunc(ih*{h:.4f}/2)*2:trunc(iw*{l:.4f}):trunc(ih*{t:.4f})"
+
+
+def _flips(it: dict) -> list[str]:
+    return [f for f, on in (("hflip", it.get("flip_h")), ("vflip", it.get("flip_v"))) if on]
+
+
+def _angle(it: dict) -> float:
+    """Rotação em graus, entre -180 e 180 (0 = sem rotação)."""
+    try:
+        a = float(it.get("rotate") or 0) % 360
+    except (TypeError, ValueError):
+        return 0.0
+    a = a - 360 if a > 180 else a
+    return 0.0 if abs(a) < 0.05 else a
 
 
 def _fit_chain(label_in: str, label_out: str, it: dict, W: int, H: int, bg: str) -> str:
@@ -216,9 +243,14 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         src_len = float(it["out"]) - float(it["in"])
         length = end - start
         idx = add_input(a, float(it["in"]), src_len)
-        chain = f"[{idx}:v]setpts=(PTS-STARTPTS)/{speed:.4f},fps={fps},format=yuv420p[r{i}];"
+        crop = _crop(it)
+        chain = f"[{idx}:v]setpts=(PTS-STARTPTS)/{speed:.4f},fps={fps},format=yuv420p{',' + crop if crop else ''}[r{i}];"
         chain += _fit_chain(f"r{i}", f"f{i}", it, W, H, bgc) + ";"
-        post = []
+        # espelhar e girar valem sobre o quadro já encaixado (igual à prévia)
+        post = _flips(it)
+        ang = _angle(it)
+        if ang:
+            post.append(f"rotate={ang:.3f}*PI/180:ow={W}:oh={H}:c={bgc}")
         b, c, s = float(it.get("brightness") or 0), float(it.get("contrast") or 1), float(it.get("saturation") or 1)
         if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3:
             post.append(f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
@@ -269,10 +301,15 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
         idx = add_input(a, float(it["in"]), length)
         ow = _even(W * max(0.05, min(2.0, float(it.get("scale") or 0.4))))
         op = max(0.0, min(1.0, float(it.get("opacity", 1.0))))
-        fx = [f"setpts=PTS-STARTPTS+{start:.3f}/TB", f"scale={ow}:-2", "format=rgba"]
+        crop = _crop(it)
+        fx = [f"setpts=PTS-STARTPTS+{start:.3f}/TB", *([crop] if crop else []), f"scale={ow}:-2", "format=rgba"]
         b, c, s = float(it.get("brightness") or 0), float(it.get("contrast") or 1), float(it.get("saturation") or 1)
         if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3:
-            fx.insert(2, f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
+            fx.insert(len(fx) - 1, f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
+        fx += _flips(it)
+        ang = _angle(it)
+        if ang:  # o quadro cresce para caber a imagem girada; o centro continua no mesmo ponto
+            fx.append(f"rotate={ang:.3f}*PI/180:ow=rotw({ang:.3f}*PI/180):oh=roth({ang:.3f}*PI/180):c=none")
         if op < 0.999:
             fx.append(f"colorchannelmixer=aa={op:.3f}")
         graph.append(f"[{idx}:v]{','.join(fx)}[o{j}]")
@@ -289,7 +326,7 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
     # ---- faixa de áudio (música, efeitos, narração)
     for j, it in enumerate(p["tracks"]["audio"]):
         a = assets[it["asset"]]
-        if not a.get("has_audio"):
+        if not a.get("has_audio") or it.get("mute"):
             continue
         start = float(it.get("start", 0))
         if start >= total:

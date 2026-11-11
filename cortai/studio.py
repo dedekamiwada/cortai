@@ -133,12 +133,15 @@ def delete(pid: str) -> None:
 
 _ITEM_KEYS = {
     "main": {"id", "asset", "in", "out", "speed", "volume", "mute", "fit", "zoom", "pan_x", "pan_y",
-             "brightness", "contrast", "saturation", "transition", "fade_in", "fade_out", "reverse_hint"},
+             "brightness", "contrast", "saturation", "transition", "fade_in", "fade_out", "reverse_hint",
+             "crop_l", "crop_r", "crop_t", "crop_b", "flip_h", "flip_v", "rotate"},
     "overlay": {"id", "asset", "start", "in", "out", "x", "y", "scale", "opacity", "volume", "mute",
-                "brightness", "contrast", "saturation"},
+                "brightness", "contrast", "saturation", "crop_l", "crop_r", "crop_t", "crop_b", "flip_h", "flip_v",
+                "rotate"},
     "text": {"id", "start", "dur", "text", "font", "size", "color", "stroke", "stroke_w", "bg", "x", "y",
-             "anim", "bold", "italic", "align", "words", "hl", "hl_mode", "hl_pop", "kw_idx", "kw_color"},
-    "audio": {"id", "asset", "start", "in", "out", "volume", "fade_in", "fade_out", "speed"},
+             "anim", "bold", "italic", "align", "words", "hl", "hl_mode", "hl_pop", "kw_idx", "kw_color",
+             "shadow", "shadow_d", "shadow_a"},
+    "audio": {"id", "asset", "start", "in", "out", "volume", "fade_in", "fade_out", "speed", "mute"},
 }
 
 
