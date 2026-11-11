@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import captions, edit, frames, media, paths, picker, render, signals, styles, to_studio, transcribe
+from . import captions, edit, frames, media, paths, picker, render, signals, styles, titles, to_studio, transcribe
 
 JOBS_DIR = paths.JOBS_DIR
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -46,12 +46,14 @@ DEFAULT_OPTS = {
     "auto_zoom": True,
     "remove_pauses": False,
     "normalize_audio": True,
+    "voice_enhance": True,
 }
 
 # o que o editor / "aplicar a todos" pode mudar em um clipe (sobrepõe as opções do job)
 STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color", "caption_upper",
               "caption_position", "keyword_highlight", "keyword_color", "title_overlay", "title_mode",
-              "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio")
+              "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio",
+              "voice_enhance")
 CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds")
 SETTINGS_FILE = JOBS_DIR / "_settings.json"
 
@@ -131,7 +133,8 @@ def busy() -> bool:
             or any(c.get("status") in ("pending", "rendering") for c in j["clips"])
             for j in _jobs.values()
         )
-    return working or any(st.get("status") == "learning" for st in styles.list_styles(JOBS_DIR))
+    from . import posedit  # importado aqui: posedit importa jobs
+    return working or posedit.busy() or any(st.get("status") == "learning" for st in styles.list_styles(JOBS_DIR))
 
 
 def get(job_id: str) -> dict | None:
@@ -261,7 +264,7 @@ def _run_pipeline(job_id: str) -> None:
     events = signals.audio_events(loud, words)
 
     style = styles.get(JOBS_DIR, opts.get("style_id"))
-    system = picker.system_prompt(opts["content_type"], style)
+    system = picker.system_prompt(opts["content_type"], style) + titles.guide(JOBS_DIR, options=False)
     prompt = picker.build_prompt(transcript, events, src["duration"], opts)
     (d / "prompt.txt").write_text(picker.manual_prompt(system, prompt), encoding="utf-8")
 
@@ -307,6 +310,7 @@ def _visual_review(job_id: str, backend: str, candidates, transcript, events, st
     system = picker.REVIEW_SYSTEM
     if style and style.get("guide"):
         system += f"\n\nGuia de estilo a seguir (\"{style['name']}\"):\n{style['guide']}"
+    system += titles.guide(JOBS_DIR)
     prompt = picker.review_prompt(candidates, transcript, events, windows, [p.name for p in images], opts)
     raw = picker.ask(backend, system, prompt, picker.REVIEW_SCHEMA, images)
     (_dir(job_id) / "review.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -318,6 +322,66 @@ def _visual_review(job_id: str, backend: str, candidates, transcript, events, st
             item["review_image"] = f"{job_id}/review/c{idx:02d}.jpg"
         out.append(item)
     return out
+
+
+def retitle(job_id: str) -> int:
+    """Gera títulos novos para os clipes já prontos, sem refazer os cortes."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    if job["status"] not in ("done", "error") or not job["clips"]:
+        raise ValueError("espere o processamento terminar")
+    backend = picker.resolve_backend(job.get("backend") or job["options"].get("backend", "auto"))
+    if backend == "manual":
+        raise ValueError("gerar títulos precisa do Claude Code logado ou de ANTHROPIC_API_KEY")
+    update(job_id, status="titling", progress=0.0, error=None, message="Claude escrevendo títulos…")
+    _worker.submit(_guard, job_id, _retitle, backend)
+    return len(job["clips"])
+
+
+def _retitle(job_id: str, backend: str) -> None:
+    job = get(job_id)
+    words = _words(job_id)
+    speech = {c["n"]: " ".join(w["w"] for w in words if c["start"] <= w["s"] < c["end"]) for c in job["clips"]}
+    prompt = titles.retitle_prompt(job["clips"], speech)
+    raw = picker.ask(backend, titles.RETITLE_SYSTEM + titles.guide(JOBS_DIR), prompt, titles.RETITLE_SCHEMA)
+    (_dir(job_id) / "titles.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    changed, to_render = [], []
+    for item in raw.get("clips", []):
+        job = get(job_id)
+        idx = next((i for i, c in enumerate(job["clips"]) if c["n"] == item.get("n")), None)
+        if idx is None:
+            continue
+        clip = job["clips"][idx]
+        picked = titles.choose(item.get("title_options"), item.get("title", ""))
+        if not picked["title"]:
+            continue
+        old = clip["title"]
+        if old and all(o["title"] != old for o in picked["title_options"]):
+            # o título anterior continua disponível como sugestão no editor
+            picked["title_options"].append({"title": old, "formula": titles.MANUAL, "score": 0, "problems": []})
+        fields = dict(picked)
+        if (item.get("post") or "").strip():
+            fields["post"] = item["post"].strip()
+        overrides = dict(clip.get("overrides", {}))
+        if "title_text" in overrides:
+            overrides["title_text"] = picked["title"]
+            fields["overrides"] = overrides
+        opts = {**job["options"], **overrides}
+        if opts.get("title_overlay") and picked["title"] != old:
+            fields["status"] = "pending"  # o título está gravado no vídeo: precisa renderizar de novo
+            to_render.append(idx)
+        _set_clip(job_id, idx, **fields)
+        changed.append({**clip, **fields})
+    titles.record(JOBS_DIR, job_id, changed)
+
+    for i, idx in enumerate(to_render):
+        update(job_id, status="rendering", progress=i / len(to_render),
+               message=f"Renderizando com o título novo {i + 1} de {len(to_render)}…")
+        _render_one(job_id, idx, words)
+    update(job_id, status="done", progress=1.0,
+           message=f"Títulos novos em {len(changed)} clipes" + (f", {len(to_render)} renderizados de novo" if to_render else ""))
 
 
 def submit_manual(job_id: str, raw: str) -> None:
@@ -343,6 +407,7 @@ def _accept_plan(job_id: str, raw: dict) -> None:
     for i, c in enumerate(clips, 1):
         c.update({"n": i, "status": "pending", "rev": 0, "review_image": images.get(c["candidate"])})
     update(job_id, clips=clips, status="rendering", progress=0.0)
+    titles.record(JOBS_DIR, job_id, clips)
     _render_all(job_id, words)
 
 
@@ -448,8 +513,12 @@ def rerender(job_id: str, n: int, changes: dict) -> None:
         overrides["word_adds"] = _clean_adds(overrides["word_adds"])
     fields = {"start": round(start, 2), "end": round(end, 2), "overrides": overrides, "status": "pending"}
     if "title" in changes:
-        fields["title"] = str(changes["title"])[:200]
+        fields["title"] = str(changes["title"]).strip()[:200]
+        if fields["title"] != clip["title"]:
+            fields["title_formula"] = titles.formula_of(clip, fields["title"])
     _set_clip(job_id, idx, **fields)
+    if "title_formula" in fields:
+        titles.record(JOBS_DIR, job_id, [{**clip, **fields}])
     _worker.submit(_render_one, job_id, idx, _words(job_id))
 
 
@@ -545,7 +614,7 @@ def export_zip(job_id: str) -> Path:
             if (clip_dir / "clip.srt").exists():
                 z.write(clip_dir / "clip.srt", f"{base}.srt")
             post = c.get("post") or f"{c['title']}\n\n{' '.join(c.get('hashtags', []))}"
-            lines.append(f"### {base}  (score {c['score']})\n{post}\n")
+            lines.append(f"### {base}  (score {c['score']})\nTítulo: {c['title']}\n{post}\n")
         z.writestr("posts.txt", "\n".join(lines))
     return out
 

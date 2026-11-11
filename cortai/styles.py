@@ -36,8 +36,9 @@ Padrões observados em cortes de canais de cortes de streamers brasileiros com c
   reação acaba ou numa frase de efeito curta. Não corta no meio da risada.
 - Piadas de bate-papo também funcionam, mas só se a punchline for curta e a reação aparecer (a pausa/cara depois
   da piada é parte do corte).
-- Título curto (2 a 6 palavras), CAIXA ALTA, tom de zoeira: descreve o acontecimento ("ALANZOKA REINICIANDO") ou
-  cita a frase marcante ("AIN PRENDI MEU DEDINHO kk"). Sem clickbait explicativo.
+- Título: tom de zoeira, curto e sem clickbait explicativo, seguindo as regras de título. Nesses canais de cortes
+  o título costuma citar a frase marcante ("AIN PRENDI MEU DEDINHO"), mas isso se apoia na fama do streamer:
+  para canal pequeno, citar a fala é só uma das opções.
 """,
 }
 

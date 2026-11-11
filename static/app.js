@@ -7,12 +7,13 @@ const STAGES = {
   transcribing: "Transcrevendo",
   selecting: "Claude escolhendo candidatos",
   reviewing: "Claude assistindo aos candidatos",
+  titling: "Claude escrevendo títulos",
   waiting_manual: "Esperando sua resposta do Claude",
   rendering: "Renderizando",
   done: "Pronto",
   error: "Erro",
 };
-const BUSY = new Set(["queued", "downloading", "transcribing", "selecting", "reviewing", "rendering"]);
+const BUSY = new Set(["queued", "downloading", "transcribing", "selecting", "reviewing", "titling", "rendering"]);
 const LAYOUTS = { face: "seguindo rosto", fit: "vídeo inteiro", split: "tela dividida", manual: "posição fixa" };
 const SCORE_NAMES = { hook: "Gancho", flow: "Ritmo", value: "Graça", trend: "Compartilhável" };
 // mesmos limites de agrupamento de captions.py, para a prévia do editor
@@ -102,7 +103,7 @@ function readFields(root, names) {
   return out;
 }
 const STYLE_FIELDS = ["layout", "caption_preset", "caption_position", "caption_color", "keyword_color", "title_mode",
-  "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio"];
+  "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio", "voice_enhance"];
 
 // ---------------------------------------------------------------- estilos
 async function loadStyles() {
@@ -283,7 +284,7 @@ function renderJob(job) {
   $("#job-title").textContent = job.name;
   const st = $("#job-status");
   const busy = BUSY.has(job.status);
-  const indeterminate = ["selecting", "downloading", "queued"].includes(job.status) ||
+  const indeterminate = ["selecting", "downloading", "queued", "titling"].includes(job.status) ||
     (job.status === "reviewing" && job.message.startsWith("Claude"));
   st.innerHTML = `<div class="msg"></div>${busy ? `<div class="bar ${indeterminate ? "indeterminate" : ""}"><i></i></div>` : ""}
     ${job.error ? `<div class="err"></div>` : ""}`;
@@ -413,6 +414,7 @@ function fillClip(el, c) {
   frames.classList.toggle("hidden", !c.review_image);
   if (c.review_image) frames.href = `/media/${c.review_image}`;
   $(".edit", el).disabled = !(done || c.status === "error");
+  $(".posedit", el).disabled = !done;
   $(".clip-error", el).textContent = c.error || "";
   el._clip = c;
 }
@@ -437,6 +439,16 @@ function bindClip(el, jobId, n) {
       alert(ex.message);
       e.target.disabled = false;
       e.target.textContent = "🎬 Estúdio";
+    }
+  };
+  $(".posedit", el).onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      const p = await postJSON("/api/pos", { job: jobId, n });
+      location.href = `pos.html#/p/${p.id}`;
+    } catch (ex) {
+      alert(ex.message);
+      e.target.disabled = false;
     }
   };
   $(".del", el).onclick = async () => {
@@ -469,6 +481,17 @@ $("#reselect-btn").onclick = async () => {
   try {
     await postJSON(`/api/jobs/${currentJob.id}/reselect`, { instructions: $("#reselect-instructions").value });
     $("#clips").replaceChildren();
+    openJob(currentJob.id);
+  } catch (ex) {
+    alert(ex.message);
+  }
+};
+$("#retitle-btn").onclick = async () => {
+  const n = currentJob.clips.length;
+  if (!confirm(`Gerar títulos e posts novos para os ${n} clipes? O título atual continua como sugestão no editor. ` +
+    "Clipes com o título gravado no vídeo são renderizados de novo.")) return;
+  try {
+    await postJSON(`/api/jobs/${currentJob.id}/retitle`, {});
     openJob(currentJob.id);
   } catch (ex) {
     alert(ex.message);
@@ -517,6 +540,11 @@ async function openEditor(jobId, n) {
   vid.onloadedmetadata = () => { vid.currentTime = ed.sel.s - ws; };
 
   $("#ed-title").value = data.clip.title;
+  $("#ed-title-options").innerHTML = (data.clip.title_options || [])
+    .filter((o) => !(o.problems || []).length)
+    .sort((a, b) => b.score - a.score)
+    .map((o) => `<option value="${escapeHtml(o.title)}">${o.formula} · nota ${o.score} · ${o.title.length} car.</option>`)
+    .join("");
   $("#ed-layout").value = o.layout || "auto";
   $("#ed-cropx").value = o.crop_x ?? 0.5;
   $("#ed-captions").checked = o.captions !== false;

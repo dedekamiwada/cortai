@@ -23,7 +23,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
-from . import signals
+from . import signals, titles
 
 MODEL = os.environ.get("CORTAI_MODEL", "claude-opus-5-5")
 EFFORT = os.environ.get("CORTAI_EFFORT", "high")
@@ -47,6 +47,7 @@ class Clip(BaseModel):
     reactions: list[float] = []
     keywords: list[str] = []
     post: str = ""
+    title_options: list[dict] = []
 
 
 class ClipPlan(BaseModel):
@@ -77,8 +78,10 @@ REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["clips"],
     "properties": {"clips": {"type": "array", "items": {
         "type": "object", "additionalProperties": False,
-        "required": ["candidate", "keep", "visual", "scores", "peak", "reactions", "keywords", "post", *_CLIP_FIELDS],
+        "required": ["candidate", "keep", "visual", "scores", "peak", "reactions", "keywords", "post",
+                     "title_options", *_CLIP_FIELDS],
         "properties": {
+            "title_options": titles.TITLE_OPTIONS_FIELD,
             "candidate": {"type": "integer", "description": "Número do candidato revisado"},
             "keep": {"type": "boolean", "description": "false se a tela não sustenta o corte"},
             "visual": {"type": "string", "description": "O que se VÊ acontecendo (jogo e câmera)"},
@@ -149,13 +152,15 @@ tela parada, jogo sem nada acontecendo enquanto ele só conversa — a não ser 
 3. Ajuste `start` para que o acontecimento visual caia depois de 5 a 10 s de contexto (o suficiente para \
 entender o lance) e `end` para logo depois que a reação acabar. Os quadros cobrem um pouco antes e depois do \
 candidato justamente para isso; se precisar de mais contexto que isso, pode ir além dos quadros.
-4. Reescreva o título pelo que se VÊ, se o original foi chutado só pela fala.
+4. Título: escreva pelo que se VÊ e pelo que é dito, seguindo as regras de título abaixo — 5 opções em \
+`title_options` e a melhor em `title`.
 5. Dê notas 0 a 100 em `scores`: hook (prende nos 3 primeiros segundos), flow (ritmo, sem partes mortas), \
 value (graça/surpresa/valor), trend (potencial de compartilhamento). `score` = sua nota geral.
 6. Edição: `peak` = segundo do acontecimento; `reactions` = até 2 segundos em que a CARA do streamer reage \
 mais forte nos quadros (o vídeo dá um zoom ali — deixe vazio se não houver câmera ou reação visível); \
 `keywords` = 1 a 4 palavras realmente ditas no trecho que carregam a graça (serão destacadas na legenda); \
-`post` = descrição curta para postar, com tom de zoeira, no idioma do vídeo, terminando com 3 a 5 hashtags.
+`post` = descrição curta para postar, com tom de zoeira, no idioma do vídeo: uma linha que amplia a \
+curiosidade sem repetir o título (sem "kkkk"), terminando com 3 a 5 hashtags (jogo + nicho).
 Mantenha o número do candidato em `candidate`. Revise todos os candidatos."""
 
 
@@ -391,9 +396,10 @@ def snap_clips(clips: list[Clip], words: list[dict], duration: float, min_len: f
             continue
         if any(start < o["end"] and end > o["start"] for o in out):
             continue
+        picked = titles.choose(clip.title_options, clip.title)
         out.append({
             "candidate": clip.candidate,
-            "title": clip.title.strip(),
+            **picked,
             "start": round(start, 2),
             "end": round(end, 2),
             "hook": clip.hook.strip(),
