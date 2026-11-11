@@ -11,7 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import captions, jobs, paths, picker, posedit, studio, studio_render, styles
+from . import autocaptions, captions, fx, jobs, paths, picker, posedit, studio, studio_render, styles
 
 app = FastAPI(title="Cortaí")
 jobs.load_existing()
@@ -465,6 +465,93 @@ async def studio_add_asset(pid: str, request: Request):
         return studio.add_asset(pid, path)
     except FileNotFoundError as exc:
         raise HTTPException(400, str(exc))
+
+
+@app.post("/api/studio/projects/{pid}/autocaptions")
+async def studio_autocaptions(pid: str, request: Request):
+    """Legenda automática: transcreve a faixa principal em segundo plano (ver autocaptions.py)."""
+    _project_or_404(pid)
+    try:
+        autocaptions.start(pid, await request.json())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.post("/api/studio/projects/{pid}/autocaptions/ack")
+def studio_autocaptions_ack(pid: str):
+    """O editor já colocou as legendas na timeline: limpa o resultado guardado."""
+    _project_or_404(pid)
+    studio.mutate(pid, lambda p: p.__setitem__("captions_job", {**(p.get("captions_job") or {}), "items": None,
+                                                                 "status": "applied"}))
+    return {"ok": True}
+
+
+@app.get("/api/studio/fx")
+def studio_fx():
+    """Filtros de cor (com as matrizes, para a prévia), efeitos e efeitos de voz."""
+    return fx.catalog()
+
+
+@app.post("/api/studio/projects/{pid}/audio-preview")
+async def studio_audio_preview(pid: str, request: Request):
+    """Ouve 6 s do áudio de um item com a limpeza/efeito de voz (o navegador não faz esses efeitos)."""
+    p = _project_or_404(pid)
+    body = await request.json()
+    track = str(body.get("track") or "")
+    it = next((x for x in p["tracks"].get(track, []) if x.get("id") == body.get("id")), None)
+    a = p["assets"].get(it.get("asset")) if it else None
+    if not it or not a or not a.get("has_audio"):
+        raise HTTPException(400, "esse item não tem áudio")
+    try:
+        src = max(0.0, float(body.get("src") or 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "tempo inválido") from None
+    out_dir = studio._pdir(pid) / "exports"
+    out_dir.mkdir(exist_ok=True)
+    name = f"previa-voz-{it['id']}.m4a"
+    vol = float(it.get("volume", 0.0 if track == "overlay" else 1.0) or 0) or 1.0
+    chain = [f"volume={vol:.3f}", *fx.voice_chain(it), studio_render.AUDIO_FMT]
+
+    def run() -> subprocess.CompletedProcess:
+        return subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{src:.3f}", "-t", "6", "-i", a["path"], "-vn",
+                               "-af", ",".join(chain), "-c:a", "aac", "-b:a", "160k", name],
+                              cwd=out_dir, capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+    r = await run_in_threadpool(run)
+    if r.returncode != 0:
+        raise HTTPException(500, (r.stderr or "ffmpeg falhou").strip()[-400:])
+    return {"url": f"/media/_studio/{pid}/exports/{name}?v={uuid.uuid4().hex[:6]}"}
+
+
+@app.post("/api/studio/projects/{pid}/freeze")
+async def studio_freeze(pid: str, request: Request):
+    """Congelar quadro: salva o quadro do vídeo no tempo pedido como imagem do projeto."""
+    p = _project_or_404(pid)
+    body = await request.json()
+    a = p["assets"].get(str(body.get("asset") or ""))
+    if not a or a.get("kind") != "video":
+        raise HTTPException(400, "escolha um vídeo da faixa principal")
+    try:
+        t = max(0.0, float(body.get("t") or 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "tempo inválido") from None
+    dest = studio._pdir(pid) / "uploads"
+    dest.mkdir(exist_ok=True)
+    stem = "".join(ch for ch in Path(a["name"]).stem if ch.isalnum() or ch in " -_")[:40].strip() or "video"
+    out = dest / f"congelado-{stem}-{t:.2f}s.png"
+
+    def grab() -> None:
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", a["path"], "-frames:v", "1",
+                        "-update", "1", str(out)], capture_output=True)
+        if not out.is_file():  # perto do fim do arquivo: pega o último quadro disponível
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-sseof", "-0.2", "-i", a["path"], "-update", "1",
+                            str(out)], capture_output=True)
+
+    await run_in_threadpool(grab)
+    if not out.is_file():
+        raise HTTPException(500, "não consegui extrair o quadro desse ponto do vídeo")
+    return studio.add_asset(pid, out)
 
 
 @app.delete("/api/studio/projects/{pid}/assets/{aid}")

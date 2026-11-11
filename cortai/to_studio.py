@@ -118,6 +118,12 @@ def caption_items(clip: dict, opts: dict, words: list[dict], tm: TimeMap) -> lis
     inside = [x for x in captions.apply_fixes(words, opts.get("word_fixes"), opts.get("word_adds"))
               if x["e"] > start and x["s"] < end]
     mapped = [{**x, "s": tm.to_out(x["s"] - start), "e": tm.to_out(x["e"] - start)} for x in inside]
+    return texts_from_words(mapped, opts, out_dur)
+
+
+def texts_from_words(mapped: list[dict], opts: dict, out_dur: float, prefix: str = "tcap",
+                     canvas_h: int = H) -> list[dict]:
+    """Blocos de legenda (textos do Estúdio) a partir de palavras já no tempo da timeline."""
     preset = captions.PRESETS.get(opts.get("caption_preset") or "destaque", captions.PRESETS["destaque"])
     align, margin = captions.POSITIONS.get(opts.get("caption_position") or "bottom", captions.POSITIONS["bottom"])
     size = preset["size"]
@@ -141,7 +147,7 @@ def caption_items(clip: dict, opts: dict, words: list[dict], tm: TimeMap) -> lis
             continue
         labels = [w["w"].upper() if upper else w["w"] for w in chunk]
         it = {
-            "id": f"tcap{ci:03d}", "start": round(t0, 3), "dur": round(dur, 3), "text": " ".join(labels),
+            "id": f"{prefix}{ci:03d}", "start": round(t0, 3), "dur": round(dur, 3), "text": " ".join(labels),
             "font": preset["font"], "size": size, "color": "#FFFFFF", "stroke": "#000000",
             "stroke_w": preset["outline"], "bg": "", "x": 0.5, "y": round(y, 4), "anim": "none", "bold": True,
             "words": spans, "hl_mode": preset["mode"], "hl": (opts.get("caption_color") or "#FFE600").upper(),

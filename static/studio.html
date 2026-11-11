@@ -68,6 +68,18 @@
     <div class="bin-panel hidden" data-panel="text">
       <p class="muted small">Clique para adicionar no ponto onde está o cursor da timeline.</p>
       <div class="text-presets" id="text-presets"></div>
+      <div class="autocap">
+        <h4>Legendas automáticas</h4>
+        <p class="muted small">Transcreve a fala dos vídeos da faixa principal (Whisper, aqui no seu PC) e cria as legendas com destaque palavra por palavra. Gerar de novo troca as anteriores.</p>
+        <select id="ac-preset"></select>
+        <div class="autocap-row">
+          <select id="ac-pos"><option value="bottom">Embaixo</option><option value="middle">No meio</option><option value="top">No topo</option></select>
+          <input type="color" id="ac-color" value="#FFE600" title="Cor do destaque">
+          <label class="check small"><input type="checkbox" id="ac-upper" checked> CAIXA ALTA</label>
+        </div>
+        <button class="primary" id="ac-go">Gerar legendas</button>
+        <div id="ac-status" class="muted small"></div>
+      </div>
     </div>
     <div class="bin-panel hidden" data-panel="trans">
       <p class="muted small">Selecione um vídeo na faixa principal e escolha a transição de entrada dele.</p>
@@ -93,6 +105,9 @@
       <button class="ghost small" id="tl-split" title="Dividir no cursor (S)">✂ Dividir</button>
       <button class="ghost small" id="tl-dup" title="Duplicar (Ctrl+D)">⧉ Duplicar</button>
       <button class="ghost small" id="tl-del" title="Excluir (Delete)">🗑 Excluir</button>
+      <button class="ghost small" id="tl-trim-l" title="Apagar do começo do item até o cursor (Q)">⇤ Q</button>
+      <button class="ghost small" id="tl-trim-r" title="Apagar do cursor até o fim do item (W)">W ⇥</button>
+      <button class="ghost small" id="tl-freeze" title="Congelar o quadro do cursor por 2 s (F)">❄ Congelar</button>
       <label class="check small"><input type="checkbox" id="tl-snap" checked> Ímã</label>
       <div class="spacer"></div>
       <span class="muted small">Zoom</span>
