@@ -9,11 +9,13 @@ const STAGES = {
   reviewing: "Claude assistindo aos candidatos",
   titling: "Claude escrevendo títulos",
   waiting_manual: "Esperando sua resposta do Claude",
+  mapping: "Claude separando as partidas",
+  waiting_match: "Escolha a partida",
   rendering: "Renderizando",
   done: "Pronto",
   error: "Erro",
 };
-const BUSY = new Set(["queued", "downloading", "transcribing", "selecting", "reviewing", "titling", "rendering"]);
+const BUSY = new Set(["queued", "downloading", "transcribing", "selecting", "reviewing", "titling", "rendering", "mapping"]);
 const LAYOUTS = { face: "seguindo rosto", fit: "vídeo inteiro", split: "tela dividida", manual: "posição fixa" };
 const SCORE_NAMES = { hook: "Gancho", flow: "Ritmo", value: "Graça", trend: "Compartilhável" };
 // mesmos limites de agrupamento de captions.py, para a prévia do editor
@@ -194,6 +196,7 @@ $("#job-form").addEventListener("submit", async (e) => {
     num_clips: +f.num_clips.value, min_len: +f.min_len.value, max_len: +f.max_len.value,
     instructions: f.instructions.value, content_type: f.content_type.value, style_id: f.style_id.value,
     visual_review: f.visual_review.checked, layout: f.layout.value,
+    mode: f.mode.value, highlight_basis: f.highlight_basis.value,
     range_start: parseTime(f.range_start.value), range_end: parseTime(f.range_end.value),
     language: f.language.value, backend: f.backend.value, whisper_model: f.whisper_model.value,
     ...readFields(f, STYLE_FIELDS),
@@ -226,9 +229,17 @@ $("#job-form").addEventListener("submit", async (e) => {
     err.textContent = ex.message;
   } finally {
     btn.disabled = false;
-    btn.textContent = "Gerar cortes";
+    syncMode();
   }
 });
+
+const modeSelect = $("#job-form [name=mode]");
+const syncMode = () => {
+  const hl = modeSelect.value === "highlights";
+  $$(".hl-only").forEach((el) => el.classList.toggle("hidden", !hl));
+  $("#submit").textContent = hl ? "Gerar melhores momentos" : "Gerar cortes";
+};
+modeSelect.addEventListener("change", syncMode);
 
 // fetch não informa progresso de envio; XHR sim.
 function uploadFile(file, onProgress) {
@@ -299,6 +310,8 @@ function renderJob(job) {
   $("#job-tools").classList.toggle("hidden", !ready);
   if (!ready) $$(".panel").forEach((p) => p.classList.add("hidden"));
   $("#zip-btn").href = `/api/jobs/${job.id}/export.zip`;
+  renderMatches(job);
+  renderHighlight(job);
   renderClips(job);
 }
 
@@ -352,6 +365,107 @@ $("#apply-btn").onclick = async () => {
   } catch (ex) {
     $("#apply-error").textContent = ex.message;
   }
+};
+
+// ---- partidas da live
+const RESULT = { vitoria: "✅ Vitória", derrota: "❌ Derrota", empate: "➖ Empate", desconhecido: "?" };
+function renderMatches(job) {
+  const panel = $("#partidas");
+  const list = job.partidas || [];
+  panel.classList.toggle("hidden", !list.length);
+  const keep = new Set($$("#match-rows input:checked").map((b) => +b.value));
+  $("#match-rows").replaceChildren(...list.map((m) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><input type="checkbox" value="${m.n}"></td><td><b>#${m.n}</b></td><td class="t"></td>
+      <td><b class="res"></b> <span class="score-txt"></span><div class="what"></div></td><td class="muted small meta"></td>`;
+    $("input", tr).checked = keep.has(m.n);
+    $("input", tr).onchange = updateMatchCount;
+    $(".t", tr).textContent = `${fmtTime(m.inicio)} → ${fmtTime(m.fim)} · ${Math.round((m.fim - m.inicio) / 60)} min`;
+    $(".res", tr).textContent = RESULT[m.resultado] || m.resultado;
+    $(".score-txt", tr).textContent = m.placar;
+    $(".what", tr).textContent = m.resumo;
+    $(".meta", tr).textContent = [m.jogo, m.modo, `destaque ${m.destaque}`].filter(Boolean).join(" · ");
+    tr.onclick = (e) => {  // clicar na linha marca/desmarca
+      if (e.target.tagName === "INPUT") return;
+      const box = $("input", tr);
+      box.checked = !box.checked;
+      updateMatchCount();
+    };
+    return tr;
+  }));
+  updateMatchCount();
+}
+function updateMatchCount() {
+  const n = $$("#match-rows input:checked").length;
+  $("#match-go").disabled = !n;
+  $("#match-count").textContent = n ? `${n} partida${n > 1 ? "s" : ""} marcada${n > 1 ? "s" : ""} → ${n} vídeo${n > 1 ? "s" : ""}` : "nenhuma partida marcada";
+}
+$("#match-go").onclick = async (e) => {
+  const picked = $$("#match-rows input:checked").map((b) => +b.value);
+  e.target.disabled = true;
+  const made = [];
+  for (const n of picked) {
+    try {
+      const r = await postJSON(`/api/jobs/${currentJob.id}/partidas/${n}`, { basis: $("#match-basis").value });
+      made.push(`<a href="#/job/${r.id}">partida ${n}</a>`);
+    } catch (ex) { made.push(`partida ${n}: ${escapeHtml(ex.message)}`); }
+  }
+  $$("#match-rows input:checked").forEach((b) => (b.checked = false));
+  updateMatchCount();
+  $("#match-made").innerHTML = `Projetos criados (rodam um por vez, na fila): ${made.join(" · ")}`;
+};
+$("#map-btn").onclick = async () => {
+  if (!confirm("O Claude vai assistir à live inteira (folhas de frames) para separar as partidas. Continuar?")) return;
+  try {
+    await postJSON(`/api/jobs/${currentJob.id}/partidas`, {});
+    openJob(currentJob.id);
+  } catch (ex) { alert(ex.message); }
+};
+
+// ---- melhores momentos da partida
+const hlScripts = {};
+async function renderHighlight(job) {
+  const panel = $("#highlight");
+  const hl = job.options.mode === "highlights" ? job.highlight : null;
+  panel.classList.toggle("hidden", !hl);
+  if (!hl) return;
+  $("#hl-title").textContent = hl.titulo || "Melhores momentos";
+  $("#hl-post").textContent = hl.post || "";
+  $("#hl-compile").disabled = BUSY.has(job.status);
+  for (const el of $$(".hl-out", panel)) {
+    const v = hl[el.dataset.key];
+    el.classList.toggle("hidden", !v);
+    if (!v) continue;
+    const src = `/media/${v.file}?v=${v.rev}`;
+    const video = $("video", el);
+    if (video.dataset.src !== src) { video.dataset.src = src; video.src = src; }
+    $(".info", el).textContent = `· ${v.duration.toFixed(0)} s · ${v.lances} lances`;
+    const base = (job.name || "partida").replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N} _-]/gu, "").slice(0, 50);
+    Object.assign($(".dl", el), { href: src, download: `${base} - ${el.dataset.key}.mp4` });
+    Object.assign($(".txt", el), { href: `/media/${v.roteiro}?v=${v.rev}`, download: `${base} - roteiro ${el.dataset.key}.txt` });
+    Object.assign($(".srt", el), { href: `/media/${v.srt}?v=${v.rev}`, download: `${base} - roteiro ${el.dataset.key}.srt` });
+    const key = `${v.roteiro}?v=${v.rev}`;
+    if (!hlScripts[el.dataset.key] || hlScripts[el.dataset.key].key !== key) {
+      hlScripts[el.dataset.key] = { key, text: await (await fetch(`/media/${key}`)).text() };
+    }
+  }
+  showScript();
+}
+function showScript() {
+  const s = hlScripts[$("#hl-script-pick").value];
+  $("#hl-script").textContent = s ? s.text : "O roteiro aparece quando os vídeos ficarem prontos.";
+}
+$("#hl-script-pick").onchange = showScript;
+$("#hl-copy").onclick = async (e) => {
+  await navigator.clipboard.writeText($("#hl-script").textContent);
+  e.target.textContent = "Copiado!";
+  setTimeout(() => (e.target.textContent = "Copiar"), 1500);
+};
+$("#hl-compile").onclick = async () => {
+  try {
+    await postJSON(`/api/jobs/${currentJob.id}/compile`, {});
+    openJob(currentJob.id);
+  } catch (ex) { alert(ex.message); }
 };
 
 function renderClips(job) {

@@ -259,6 +259,37 @@ def retitle(job_id: str):
     return {"ok": True, "clips": count}
 
 
+@app.post("/api/jobs/{job_id}/partidas")
+def map_matches(job_id: str):
+    _job_or_404(job_id)
+    try:
+        jobs.map_matches(job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/partidas/{n}")
+async def match_highlights(job_id: str, n: int, request: Request):
+    _job_or_404(job_id)
+    body = await request.json()
+    try:
+        job = jobs.create_match_job(job_id, n, body.get("basis") or "fala_imagem")
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"id": job["id"]}
+
+
+@app.post("/api/jobs/{job_id}/compile")
+def compile_highlights(job_id: str):
+    _job_or_404(job_id)
+    try:
+        jobs.compile_highlights(job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
 @app.post("/api/jobs/{job_id}/clips/{n}")
 async def rerender(job_id: str, n: int, request: Request):
     _job_or_404(job_id)

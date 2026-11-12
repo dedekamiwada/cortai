@@ -29,6 +29,15 @@ Para projetos que já estão prontos, o botão **🏷 Gerar títulos** pede ao C
 
 Aprendizado: cada título vai para `jobs/_titulos/titulos.csv` (abre no Excel). Depois de postar, preencha a coluna `views` (aceita `12000`, `12.000`, `12k`, `1,2 mil`). Quando houver pelo menos 2 fórmulas com 3 posts medidos ou mais, o prompt passa a dizer ao Claude quais fórmulas rendem mais no seu canal. Feche o CSV no Excel antes de rodar um job, senão a gravação daquele job é pulada.
 
+## Melhores momentos da partida
+
+No formulário, **Tipo de projeto → Melhores momentos da partida (1 vídeo)**. Em vez de vários cortes soltos, sai um vídeo só com os melhores lances da partida, em **duas versões**: short vertical de 60–90 s e horizontal (YouTube), cada uma com um **roteiro de narração** (.txt e .srt com o tempo de cada fala) para você gravar por cima no CapCut.
+
+- **Escolher os lances pela fala + imagem** (usa a transcrição e os picos de áudio) ou **só pela imagem** (sem transcrição: o Claude assiste à partida em folhas de frames e usa os picos do som do jogo).
+- O Claude monta a história (começo → lances → momento decisivo → resultado), dá um rótulo a cada lance ("#3 · VIRADA") e escreve as falas da narração. Os lances aparecem como clipes normais: dá para editar um e clicar em **↻ Remontar vídeos**.
+- **Separar por partida**: numa live longa (ou pelo botão **🗺 Separar por partida** de qualquer projeto), o Claude mapeia a live pelo HUD do jogo — início, fim, placar, resultado e um resumo de cada partida. Você marca as partidas que quer e clica em **Gerar vídeos das partidas marcadas**; cada uma vira um projeto, reaproveitando a transcrição da live.
+- Limitação: com uma live vertical (cena vertical do OBS), a versão horizontal mostra o vídeo vertical no meio com fundo desfocado.
+
 ## Pós-edição (drama num clipe pronto)
 
 Em `pos.html` (link "✨ Pós-edição" no topo, ou o botão **✨ Pós-edição** em cada clipe) você abre um vídeo já cortado — do Cortaí ou de fora, mesmo com legenda e título gravados — e o Claude planeja a pós-edição:

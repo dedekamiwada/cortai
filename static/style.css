@@ -233,3 +233,25 @@ h4 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; te
 .pos-out video { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 10px; }
 .pos-out .dl { text-align: center; text-decoration: none; padding: 8px; border-radius: 10px; }
 @media (max-width: 760px) { .pos-layout { grid-template-columns: 1fr; } .pos-player { max-width: 320px; } }
+
+/* ---------------------------------------------------------------- melhores momentos */
+.hl-panel { margin-bottom: 18px; }
+.hl-panel h2 { margin-top: 0; }
+.hl-outs { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; margin: 12px 0 18px; }
+.hl-out { display: flex; flex-direction: column; gap: 8px; width: 260px; }
+.hl-out.wide { width: min(560px, 100%); }
+.hl-out video { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 10px; }
+.hl-out.wide video { aspect-ratio: 16 / 9; }
+.hl-out .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.hl-out .actions a { text-decoration: none; padding: 6px 10px; border-radius: 10px; font-size: 13px; }
+.hl-script-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.hl-script-head h4 { margin: 0; flex: 1; }
+.hl-script-head select { width: auto; }
+#hl-script { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px; max-height: 420px; overflow: auto; font-size: 13px; line-height: 1.5; }
+.matches .t { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.matches td { vertical-align: middle; }
+.matches tr { cursor: pointer; }
+.matches tr:hover td { background: var(--panel-2); }
+.matches .what { font-size: 13px; margin-top: 2px; }
+@media (max-width: 760px) { .matches .meta { display: none; } }

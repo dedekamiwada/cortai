@@ -47,6 +47,8 @@ DEFAULT_OPTS = {
     "remove_pauses": False,
     "normalize_audio": True,
     "voice_enhance": True,
+    "mode": "clips",                   # "clips" (vários cortes) ou "highlights" (melhores momentos num vídeo)
+    "highlight_basis": "fala_imagem",  # "fala_imagem" ou "imagem"
 }
 
 # o que o editor / "aplicar a todos" pode mudar em um clipe (sobrepõe as opções do job)
@@ -106,7 +108,7 @@ def load_existing() -> None:
             job = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if job.get("status") not in ("done", "error", "waiting_manual"):
+        if job.get("status") not in ("done", "error", "waiting_manual", "waiting_match"):
             job["status"], job["error"] = "error", "servidor reiniciado durante o processamento"
         for clip in job.get("clips", []):
             if clip.get("status") in ("rendering", "pending"):
@@ -129,7 +131,7 @@ def busy() -> bool:
     """Há job, render de clipe ou aprendizado de estilo em andamento (fechar o app os interromperia)."""
     with _lock:
         working = any(
-            j["status"] not in ("done", "error", "waiting_manual")
+            j["status"] not in ("done", "error", "waiting_manual", "waiting_match")
             or any(c.get("status") in ("pending", "rendering") for c in j["clips"])
             for j in _jobs.values()
         )
@@ -152,7 +154,7 @@ def delete(job_id: str) -> None:
 # ------------------------------------------------------------------ criação
 
 def create(name: str, opts: dict, url: str | None = None, local_path: str | None = None,
-           upload_path: Path | None = None) -> dict:
+           upload_path: Path | None = None, seed_files: dict[str, Path] | None = None) -> dict:
     job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     d = _dir(job_id)
     d.mkdir(parents=True)
@@ -180,6 +182,8 @@ def create(name: str, opts: dict, url: str | None = None, local_path: str | None
         "options": {**defaults(), **opts}, "backend": None,
         "source": source, "clips": [], "error": None,
     }
+    for name_, path_ in (seed_files or {}).items():  # transcrição/volume já calculados da mesma fonte
+        shutil.copy(path_, d / name_)
     with _lock:
         _jobs[job_id] = job
         _save(job)
@@ -254,6 +258,9 @@ def _run_pipeline(job_id: str) -> None:
     path = Path(src["path"])
     src.update(media.probe(path))
     update(job_id, source=src)
+    if opts.get("mode") == "highlights":
+        _run_highlights(job_id)
+        return
     if not src["has_audio"]:
         raise RuntimeError("o vídeo não tem áudio — não dá para transcrever")
 
@@ -292,6 +299,228 @@ def _run_pipeline(job_id: str) -> None:
     else:
         _accept_plan(job_id, raw)
 
+
+# ------------------------------------------------------------------ melhores momentos da partida
+
+HIGHLIGHT_CANDIDATES = 24
+MATCH_SPLIT_MIN = 15 * 60  # acima disso, "melhores momentos" sem trecho escolhido começa separando as partidas
+
+
+def map_matches(job_id: str) -> None:
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    if job["status"] not in ("done", "error", "waiting_match") or not job["source"].get("duration"):
+        raise ValueError("espere o processamento terminar")
+    previous = "waiting_match" if job["status"] == "waiting_match" else "done" if job["clips"] else job["status"]
+    update(job_id, status="mapping", progress=0.0, error=None, message="Na fila para separar as partidas…")
+    _worker.submit(_guard, job_id, _map_matches, previous)
+
+
+def _map_matches(job_id: str, then_status: str = "done") -> None:
+    from . import highlights
+
+    job = get(job_id)
+    src = job["source"]
+    backend = picker.resolve_backend(job.get("backend") or job["options"].get("backend", "auto"))
+    if backend == "manual":
+        raise RuntimeError("separar partidas precisa do Claude Code logado ou de ANTHROPIC_API_KEY")
+    update(job_id, status="mapping", progress=0.0, message="Separando frames da live inteira…")
+    sheets = highlights.scan_sheets(Path(src["path"]), src, _dir(job_id) / "mapa", 0.0, src["duration"],
+                                    highlights.MAP_MAX_FRAMES, highlights.MAP_MIN_STEP)
+    update(job_id, message=f"Claude separando as partidas ({len(sheets)} folhas de frames)…")
+    raw = picker.ask(backend, highlights.MAP_SYSTEM, highlights.map_prompt(sheets, src["duration"]),
+                     highlights.MAP_SCHEMA, [s[0] for s in sheets])
+    (_dir(job_id) / "partidas.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    partidas = highlights.normalize_matches(raw, src["duration"])
+    if not partidas:
+        raise RuntimeError("não achei nenhuma partida nas imagens da live")
+    update(job_id, partidas=partidas, status=then_status, progress=1.0,
+           message=f"{len(partidas)} partidas encontradas" +
+                   (" — escolha de qual fazer os melhores momentos" if then_status == "waiting_match" else ""))
+
+
+def create_match_job(job_id: str, n: int, basis: str) -> dict:
+    """Novo projeto de melhores momentos só com o trecho de uma partida (reaproveita transcrição e volume)."""
+    job = get(job_id)
+    m = next((p for p in (job or {}).get("partidas") or [] if p["n"] == n), None)
+    if not m:
+        raise ValueError("partida não encontrada")
+    d = _dir(job_id)
+    seed = {}
+    if (d / "loudness.json").exists():
+        seed["loudness.json"] = d / "loudness.json"
+        tfile = d / "transcript.json"
+        if tfile.exists() and json.loads(tfile.read_text(encoding="utf-8")).get("segments"):
+            seed["transcript.json"] = tfile
+    opts = {**job["options"], "mode": "highlights", "range_start": m["inicio"], "range_end": m["fim"],
+            "highlight_basis": basis if basis in ("fala_imagem", "imagem") else "fala_imagem"}
+    base = Path(job["name"]).stem if "." in job["name"] else job["name"]
+    name = f"{base} — partida {n}" + (f" ({m['placar']})" if m["placar"] else "")
+    return create(name, opts, local_path=job["source"]["path"], seed_files=seed)
+
+
+def _run_highlights(job_id: str) -> None:
+    """Partida inteira → candidatos (pela fala+imagem ou só pela imagem) → Claude assiste e monta a
+    história → renderiza os lances → junta no short vertical e na versão horizontal + roteiro."""
+    from . import highlights
+
+    job = get(job_id)
+    d, opts, src = _dir(job_id), job["options"], job["source"]
+    path = Path(src["path"])
+    start = float(opts.get("range_start") or 0)
+    end = float(opts.get("range_end") or 0) or src["duration"]
+    extra = (opts.get("instructions") or "").strip()
+    backend = picker.resolve_backend(opts["backend"])
+    update(job_id, backend=backend)
+    if backend == "manual":
+        raise RuntimeError("melhores momentos precisa do Claude Code logado ou de ANTHROPIC_API_KEY")
+    if not opts.get("range_start") and not opts.get("range_end") and src["duration"] > MATCH_SPLIT_MIN:
+        # live longa: primeiro separa as partidas e deixa o usuário escolher qual vira vídeo
+        _map_matches(job_id, then_status="waiting_match")
+        return
+
+    if opts.get("highlight_basis") == "imagem":
+        tfile, lfile = d / "transcript.json", d / "loudness.json"
+        transcript = {"segments": []}
+        if lfile.exists():
+            loud = json.loads(lfile.read_text(encoding="utf-8"))
+        else:
+            loud = []
+            if src["has_audio"]:
+                audio = _ensure_audio(job_id, path, src["duration"])
+                update(job_id, message="Medindo os picos do som do jogo…")
+                loud = signals.loudness(audio)
+                audio.unlink(missing_ok=True)
+            lfile.write_text(json.dumps(loud), encoding="utf-8")
+        tfile.write_text(json.dumps(transcript), encoding="utf-8")
+        events = signals.audio_events(loud, [])
+        update(job_id, status="reviewing", progress=0.0, message="Separando frames da partida inteira…")
+        sheets = highlights.scan_sheets(path, src, d / "scan", start, end)
+        update(job_id, status="selecting", message=f"Claude assistindo à partida ({len(sheets)} folhas de frames)…")
+        raw = picker.ask(backend, highlights.SCAN_SYSTEM,
+                         highlights.scan_prompt(sheets, events, HIGHLIGHT_CANDIDATES, extra),
+                         picker.CANDIDATES_SCHEMA, [s[0] for s in sheets])
+    else:
+        if not src["has_audio"]:
+            raise RuntimeError("o vídeo não tem áudio — use a opção 'só imagem'")
+        transcript, loud = _transcript_and_signals(job_id)
+        events = signals.audio_events(loud, transcribe.all_words(transcript))
+        text = picker.format_transcript(transcript, events, start, end)
+        update(job_id, status="selecting", progress=0.0, message="Claude lendo a partida e os picos de áudio…")
+        raw = picker.ask(backend, picker.system_prompt("game", None),
+                         highlights.transcript_candidates_prompt(text, src["duration"], HIGHLIGHT_CANDIDATES, extra),
+                         picker.CANDIDATES_SCHEMA)
+    (d / "candidates.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    candidates = sorted((c for c in picker.parse_plan(raw) if c.end > c.start), key=lambda c: c.score, reverse=True)
+    candidates = sorted(candidates[:20], key=lambda c: c.start)
+    if not candidates:
+        raise RuntimeError("o Claude não achou lances — tente outras instruções")
+
+    review_dir = d / "review"
+    shutil.rmtree(review_dir, ignore_errors=True)
+    images, windows = [], []
+    for i, c in enumerate(candidates, 1):
+        update(job_id, status="reviewing", progress=(i - 1) / len(candidates),
+               message=f"Separando frames do lance {i} de {len(candidates)}…")
+        ws, we = max(0.0, c.start - 3), min(src["duration"], c.end + 3)
+        images.append(frames.grid(path, ws, we, review_dir / f"c{i:02d}.jpg", src["width"], src["height"]))
+        windows.append((ws, we))
+
+    def context(a: float, b: float) -> str:
+        if transcript["segments"]:
+            return picker.format_transcript(transcript, events, a, b)
+        return "\n".join(signals.describe(e) for e in events if a <= e["t"] <= b and e["kind"] in ("grito", "som_alto"))
+
+    update(job_id, progress=0.0, message=f"Claude assistindo aos {len(candidates)} lances e escrevendo o roteiro…")
+    raw = picker.ask(backend, highlights.REVIEW_SYSTEM,
+                     highlights.review_prompt(candidates, windows, [p.name for p in images], context, extra),
+                     highlights.REVIEW_SCHEMA, images)
+    (d / "highlight-review.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    plan = highlights.normalize(raw, candidates, src["duration"])
+    if not plan["lances"]:
+        raise RuntimeError("nenhum lance passou na revisão — tente outras instruções")
+    kinds = {"jogada": "Jogada", "engracado": "Engraçado", "relevante": "Relevante", "resultado": "Resultado"}
+    clips = []
+    for i, x in enumerate(plan["lances"], 1):
+        clips.append({
+            "n": i, "status": "pending", "rev": 0, "title": x["label"] or f"Lance {i}",
+            "start": x["start"], "end": x["end"], "peak": x["peak"], "reactions": x["reactions"],
+            "keywords": [], "score": x["score"], "scores": {}, "visual": x["visual"],
+            "reason": kinds.get(x["tipo"], x["tipo"]) + (" · entra no short" if x["no_short"] else ""),
+            "hook": "", "post": "", "hashtags": [], "title_options": [], "candidate": x["candidate"],
+            "review_image": f"{job_id}/review/c{x['candidate']:02d}.jpg",
+            "no_short": x["no_short"], "tipo": x["tipo"], "narracao": x["narracao"],
+        })
+    update(job_id, clips=clips, status="rendering", progress=0.0,
+           highlight={"titulo": plan["titulo"], "gancho": plan["gancho"], "post": plan["post"]})
+    words = transcribe.all_words(transcript)
+    for idx in range(len(clips)):
+        update(job_id, message=f"Renderizando o lance {idx + 1} de {len(clips)} (vertical)…",
+               progress=idx / len(clips) * 0.5)
+        _render_one(job_id, idx, words)
+    _compile_highlights(job_id)
+
+
+def compile_highlights(job_id: str) -> None:
+    """Remonta os dois vídeos (depois de editar um lance, por exemplo)."""
+    job = get(job_id)
+    if not job or job["options"].get("mode") != "highlights" or not job["clips"]:
+        raise ValueError("este projeto não é de melhores momentos")
+    if job["status"] not in ("done", "error"):
+        raise ValueError("espere o processamento terminar")
+    update(job_id, status="rendering", progress=0.5, error=None, message="Remontando os vídeos…")
+    _worker.submit(_guard, job_id, _compile_highlights)
+
+
+def _compile_highlights(job_id: str) -> None:
+    from . import highlights
+
+    job = get(job_id)
+    d, src, opts = _dir(job_id), job["source"], job["options"]
+    hl = dict(job.get("highlight") or {})
+    out_dir = d / "highlights"
+    out_dir.mkdir(exist_ok=True)
+    fps = min(src.get("fps") or 30, 60)
+    done = [c for c in job["clips"] if c.get("status") == "done"]
+    if not done:
+        raise RuntimeError("nenhum lance renderizado")
+
+    short = [c for c in done if c.get("no_short")] or done
+    update(job_id, status="rendering", message="Montando o short vertical…", progress=0.6)
+    vsegs = [JOBS_DIR / c["file"] for c in short]
+    vstarts = highlights.compile_video(vsegs, [f"#{k} · {c['title']}" for k, c in enumerate(short, 1)],
+                                       hl.get("titulo", ""), out_dir / "short-vertical.mp4", 1080, 1920, fps)
+
+    hsegs = []
+    for k, c in enumerate(done, 1):
+        update(job_id, message=f"Renderizando o lance {k} de {len(done)} (horizontal)…",
+               progress=0.7 + 0.2 * (k - 1) / len(done))
+        out = out_dir / "h" / f"{c['n']:02d}.mp4"
+        highlights.horizontal_segment(Path(src["path"]), src, c["start"], c["end"], out,
+                                      opts.get("voice_enhance", True))
+        hsegs.append(out)
+    update(job_id, message="Montando a versão horizontal…", progress=0.92)
+    hstarts = highlights.compile_video(hsegs, [f"#{k} · {c['title']}" for k, c in enumerate(done, 1)],
+                                       hl.get("titulo", ""), out_dir / "horizontal.mp4", 1920, 1080, fps)
+
+    versions = {"vertical": (short, vsegs, vstarts, "short-vertical"), "horizontal": (done, hsegs, hstarts, "horizontal")}
+    for key, (clips, segs, starts, name) in versions.items():
+        durations = [highlights._duration(s) for s in segs]
+        total = highlights._duration(out_dir / f"{name}.mp4")
+        txt, srt = highlights.script(clips, starts, durations, total,
+                                     hl.get("gancho", "") if key == "vertical" else "", hl.get("titulo", ""),
+                                     "short vertical" if key == "vertical" else "horizontal")
+        (out_dir / f"{name}-roteiro.txt").write_text(txt, encoding="utf-8")
+        (out_dir / f"{name}-roteiro.srt").write_text(srt, encoding="utf-8")
+        hl[key] = {"file": f"{job_id}/highlights/{name}.mp4", "duration": round(total, 1), "lances": len(clips),
+                   "roteiro": f"{job_id}/highlights/{name}-roteiro.txt",
+                   "srt": f"{job_id}/highlights/{name}-roteiro.srt",
+                   "rev": int((hl.get(key) or {}).get("rev", 0)) + 1}
+    shutil.rmtree(out_dir / "h", ignore_errors=True)
+    update(job_id, highlight=hl, status="done", progress=1.0,
+           message=f"Short de {hl['vertical']['duration']:.0f}s e horizontal de "
+                   f"{hl['horizontal']['duration'] / 60:.1f} min prontos")
 
 def _visual_review(job_id: str, backend: str, candidates, transcript, events, style) -> list[dict]:
     job = get(job_id)

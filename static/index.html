@@ -43,6 +43,18 @@
       </label>
 
       <div class="grid">
+        <label class="field"><span>Tipo de projeto</span>
+          <select name="mode">
+            <option value="clips">Vários cortes</option>
+            <option value="highlights">Melhores momentos da partida (1 vídeo)</option>
+          </select>
+        </label>
+        <label class="field hl-only hidden"><span>Escolher os lances pela</span>
+          <select name="highlight_basis">
+            <option value="fala_imagem">Fala + imagem</option>
+            <option value="imagem">Só imagem (sem transcrição)</option>
+          </select>
+        </label>
         <label class="field"><span>Tipo de vídeo</span>
           <select name="content_type"><option value="game">Live de jogo</option><option value="talk">Conversa / podcast</option></select>
         </label>
@@ -107,6 +119,7 @@
           <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada (EQ + compressor)</span></label>
         </div>
       </details>
+      <p class="hint hl-only hidden">Sai um <b>short vertical de 60–90 s</b> e uma <b>versão horizontal</b> com os melhores lances, mais o <b>roteiro de narração</b> (.txt e .srt) para você gravar por cima no CapCut. Quantidade e duração dos clipes são decididas pela partida.</p>
       <button class="primary" type="submit" id="submit">Gerar cortes</button>
       <p class="form-error" id="form-error"></p>
     </form>
@@ -142,6 +155,50 @@
   </div>
   <div id="job-status" class="status"></div>
 
+  <section id="partidas" class="card hl-panel hidden">
+    <div class="hl-script-head">
+      <h2>Partidas da live</h2>
+      <label class="muted small">Escolher lances pela
+        <select id="match-basis"><option value="fala_imagem">fala + imagem</option><option value="imagem">só imagem</option></select>
+      </label>
+    </div>
+    <p class="muted small">O Claude separou a live pelo HUD do jogo (início, placar e tela de resultado). Marque as partidas que você quer em vídeo: cada uma vira um projeto de melhores momentos (short vertical + horizontal + roteiro).</p>
+    <table class="beats matches"><tbody id="match-rows"></tbody></table>
+    <div class="pos-actions">
+      <button class="primary" id="match-go" disabled>Gerar vídeos das partidas marcadas</button>
+      <span class="muted small" id="match-count"></span>
+    </div>
+    <div id="match-made" class="muted small"></div>
+  </section>
+
+  <section id="highlight" class="card hl-panel hidden">
+    <h2 id="hl-title">Melhores momentos</h2>
+    <p class="muted small" id="hl-post"></p>
+    <div class="hl-outs">
+      <article class="hl-out" data-key="vertical">
+        <video controls playsinline preload="metadata"></video>
+        <div><b>Short vertical</b> <span class="muted small info"></span></div>
+        <div class="actions"><a class="primary dl" download>Baixar vídeo</a><a class="ghost txt" download>Roteiro .txt</a><a class="ghost srt" download>Roteiro .srt</a></div>
+      </article>
+      <article class="hl-out wide" data-key="horizontal">
+        <video controls playsinline preload="metadata"></video>
+        <div><b>Horizontal (YouTube)</b> <span class="muted small info"></span></div>
+        <div class="actions"><a class="primary dl" download>Baixar vídeo</a><a class="ghost txt" download>Roteiro .txt</a><a class="ghost srt" download>Roteiro .srt</a></div>
+      </article>
+    </div>
+    <div class="hl-script">
+      <div class="hl-script-head">
+        <h4>Roteiro de narração</h4>
+        <select id="hl-script-pick"><option value="vertical">Short vertical</option><option value="horizontal">Horizontal</option></select>
+        <button class="ghost" id="hl-copy">Copiar</button>
+        <button class="secondary" id="hl-compile" title="Depois de editar um lance, monte os dois vídeos de novo">↻ Remontar vídeos</button>
+      </div>
+      <p class="muted small">Os tempos são do vídeo final. Importe o .srt no CapCut como legenda para ver onde cada fala entra enquanto grava.</p>
+      <pre id="hl-script"></pre>
+    </div>
+    <h4>Lances <span class="muted small">— cada um abaixo pode ser editado; depois clique em "Remontar vídeos"</span></h4>
+  </section>
+
   <section id="manual" class="card hidden">
     <h2>Modo manual</h2>
     <ol>
@@ -157,6 +214,7 @@
     <button class="secondary" data-panel="create-panel">＋ Criar clipe</button>
     <button class="secondary" data-panel="apply-panel">🎨 Estilo de todos os clipes</button>
     <button class="secondary" data-panel="reselect">✨ Pedir outros cortes ao Claude</button>
+    <button class="secondary" id="map-btn" title="O Claude separa a live por partida (início, fim, placar e resultado)">🗺 Separar por partida</button>
     <button class="secondary" id="retitle-btn" title="Títulos e posts novos para estes clipes, sem refazer os cortes">🏷 Gerar títulos</button>
     <a class="secondary" id="zip-btn" href="#">⬇ Baixar todos (.zip)</a>
   </div>
