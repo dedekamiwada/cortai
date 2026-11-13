@@ -224,13 +224,14 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
     chain += (f";[{last}]split=2[pv][cv];[pv]null{subs}[v];"
               f"[cv]fps={1 / capa.FRAME_STEP:g},scale={capa.FRAME_W}:{capa.FRAME_H}:flags=bicubic[cq]")
 
-    base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}",
-            "-filter_complex", pre + chain, "-map", "[v]"]
+    # -t antes do -i limita a LEITURA da live: sem isso a 2ª saída (quadros da capa) seguiria até o fim do vídeo
+    base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(src),
+            "-t", f"{dur:.3f}", "-filter_complex", pre + chain, "-map", "[v]"]
     audio = []
     if has_audio:
         audio = ["-map", ain if ain == "0:a:0" else f"[{ain}]", "-c:a", "aac", "-b:a", "192k"]
     tail = ["-r", f"{min(meta.get('fps') or 30, 60):.3f}", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "clip.mp4",
-            "-map", "[cq]", "-q:v", "3", "-start_number", "0", "capa/quadros/%04d.jpg"]
+            "-map", "[cq]", "-t", f"{out_dur:.3f}", "-q:v", "3", "-start_number", "0", "capa/quadros/%04d.jpg"]
     (out_dir / "sem_capa.mp4").unlink(missing_ok=True)  # capa no fim do vídeo é refeita depois do render
     _run_encode(base, audio + tail, out_dir)
 
