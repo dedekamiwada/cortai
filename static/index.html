@@ -117,6 +117,12 @@
           <label class="field check"><input name="remove_pauses" type="checkbox"><span>Remover pausas mortas</span></label>
           <label class="field check"><input name="normalize_audio" type="checkbox" checked><span>Volume padrão das redes (-14 LUFS)</span></label>
           <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada (EQ + compressor)</span></label>
+          <label class="field check"><input name="cover_auto" type="checkbox" checked><span>Capa (thumbnail) pronta em cada clipe</span></label>
+          <label class="field"><span>Estilo da capa</span>
+            <select name="cover_style"><option value="impacto">Impacto (Anton, contorno)</option><option value="faixa">Faixa vermelha (Bangers)</option><option value="caixa">Caixa branca (Montserrat)</option></select>
+          </label>
+          <label class="field"><span>Assinatura na capa <em>(opcional)</em></span><input name="cover_handle" maxlength="40" placeholder="@seu_perfil"></label>
+          <label class="field check"><input name="cover_in_video" type="checkbox"><span>Gravar a capa no fim do vídeo também</span></label>
         </div>
       </details>
       <p class="hint hl-only hidden">Sai um <b>short vertical de 60–90 s</b> e uma <b>versão horizontal</b> com os melhores lances, mais o <b>roteiro de narração</b> (.txt e .srt) para você gravar por cima no CapCut. Quantidade e duração dos clipes são decididas pela partida.</p>
@@ -216,6 +222,7 @@
     <button class="secondary" data-panel="reselect">✨ Pedir outros cortes ao Claude</button>
     <button class="secondary" id="map-btn" title="O Claude separa a live por partida (início, fim, placar e resultado)">🗺 Separar por partida</button>
     <button class="secondary" id="retitle-btn" title="Títulos e posts novos para estes clipes, sem refazer os cortes">🏷 Gerar títulos</button>
+    <button class="secondary hidden" id="covers-btn" title="Capa (thumbnail) para os clipes que ainda não têm">🖼 Gerar capas</button>
     <a class="secondary" id="zip-btn" href="#">⬇ Baixar todos (.zip)</a>
   </div>
 
@@ -275,6 +282,17 @@
       <p class="reason"></p>
       <p class="tags"></p>
       <p class="post"></p>
+      <div class="cover-row hidden">
+        <button class="cover-thumb" type="button" title="Editar capa"><img alt="Capa do clipe"></button>
+        <div class="cover-side">
+          <b>Capa</b>
+          <span class="muted small cover-note"></span>
+          <div class="cover-actions">
+            <button class="secondary cover-edit" type="button">🖼 Editar capa</button>
+            <a class="ghost cover-dl" download>Baixar capa</a>
+          </div>
+        </div>
+      </div>
       <div class="actions">
         <a class="primary dl" download>Baixar</a>
         <button class="secondary edit">Editar</button>
@@ -383,6 +401,70 @@
     <p class="form-error" id="ed-error"></p>
     <button class="ghost" id="ed-cancel">Cancelar</button>
     <button class="primary" id="ed-save">Salvar e renderizar</button>
+  </div>
+</dialog>
+
+<dialog id="cover-dlg">
+  <div class="ed-head">
+    <b class="cv-head-title">🖼 Capa do clipe</b>
+    <span class="muted small" id="cv-sub"></span>
+    <button class="ghost" id="cv-close" aria-label="Fechar">✕</button>
+  </div>
+  <div id="cv-loading" class="ed-loading">Preparando a capa…</div>
+  <div id="cv-body" class="cv-body hidden">
+    <div class="cv-left">
+      <div class="cv-stage" id="cv-stage" title="Arraste para cima ou para baixo para mover o texto">
+        <img id="cv-img" alt="Prévia da capa">
+        <div class="cv-safe" title="O perfil do TikTok mostra só esta parte (3:4)"></div>
+        <div class="cv-busy hidden" id="cv-busy">…</div>
+      </div>
+      <p class="muted small">Arraste na imagem para mover o texto. A área clara é o que aparece no perfil do TikTok; embaixo fica o título automático do app.</p>
+    </div>
+    <div class="cv-right">
+      <div class="ed-section">
+        <h4>Texto</h4>
+        <textarea id="cv-text" rows="3" maxlength="200"></textarea>
+        <p class="muted small">Ponha *asteriscos* em volta da palavra de destaque. Enter quebra a linha.</p>
+        <div class="cv-chips" id="cv-chips"></div>
+        <div class="ed-row">
+          <select id="cv-style"></select>
+          <label class="check"><input id="cv-upper" type="checkbox"> CAIXA ALTA</label>
+        </div>
+        <label class="ed-range"><span class="cv-rhead">Tamanho <b class="cv-val" data-for="cv-size"></b></span><input id="cv-size" type="range" min="0.4" max="1.8" step="0.05"></label>
+        <label class="ed-range"><span class="cv-rhead">Inclinação <b class="cv-val" data-for="cv-tilt"></b></span><input id="cv-tilt" type="range" min="-15" max="15" step="1"></label>
+        <label class="ed-range"><span class="cv-rhead">Sombra atrás do texto <b class="cv-val" data-for="cv-dark"></b></span><input id="cv-dark" type="range" min="0" max="1" step="0.05"></label>
+        <div class="ed-row cv-colors">
+          <label>Texto <input id="cv-color" type="color"></label>
+          <label>Destaque <input id="cv-hl" type="color"></label>
+          <button class="ghost small" id="cv-colors-reset" type="button">Cores do estilo</button>
+        </div>
+        <label class="ed-range">Assinatura <input id="cv-handle" maxlength="40" placeholder="@seu_perfil"></label>
+      </div>
+      <div class="ed-section">
+        <div class="ed-words-head">
+          <h4>Imagem</h4>
+          <button class="ghost small" id="cv-apex" type="button" title="Voltar para o quadro que o Cortaí escolheu">⭐ Momento ápice</button>
+        </div>
+        <div class="cv-frames" id="cv-frames"></div>
+        <p class="muted small hidden" id="cv-origin"></p>
+        <label class="ed-range"><span class="cv-rhead">Zoom <b class="cv-val" data-for="cv-zoom"></b></span><input id="cv-zoom" type="range" min="1" max="3" step="0.05"></label>
+        <div class="ed-row">
+          <label class="ed-range cv-half"><span class="cv-rhead">Esquerda ↔ direita <b class="cv-val" data-for="cv-px"></b></span><input id="cv-px" type="range" min="0" max="1" step="0.01"></label>
+          <label class="ed-range cv-half"><span class="cv-rhead">Cima ↕ baixo <b class="cv-val" data-for="cv-py"></b></span><input id="cv-py" type="range" min="0" max="1" step="0.01"></label>
+        </div>
+      </div>
+      <div class="ed-section">
+        <label class="check"><input id="cv-invideo" type="checkbox"> Gravar a capa no fim do vídeo (0,4 s)</label>
+        <p class="muted small">O TikTok deixa subir a capa no "Editar capa" → "Enviar". Se preferir escolher pelo vídeo, ligue isto e arraste o seletor até o fim.</p>
+        <label class="check"><input id="cv-default" type="checkbox"> Usar estilo e assinatura como padrão nos próximos projetos</label>
+      </div>
+    </div>
+  </div>
+  <div class="ed-foot">
+    <p class="form-error" id="cv-error"></p>
+    <a class="ghost" id="cv-download" download>Baixar capa</a>
+    <button class="ghost" id="cv-cancel">Cancelar</button>
+    <button class="primary" id="cv-save">Salvar capa</button>
   </div>
 </dialog>
 
