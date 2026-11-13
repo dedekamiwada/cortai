@@ -51,6 +51,42 @@ def talk_level(loud: list[float], words: list[dict]) -> float:
     return float(np.median(db[speech])) if speech.any() else float(np.median(db))
 
 
+# Susto (jumpscare): o volume SALTA de um trecho baixo para bem acima da fala. Calibrado em 11 cortes de
+# terror com 300 mil+ views: pega os sustos que aparecem no áudio; quem fala sem parar ou já tem música por
+# baixo não tem salto — aí quem acha o susto é a revisão visual.
+SCARE_JUMP = 15       # dB: máximo nos 2 s seguintes menos a mediana dos 4 s antes
+SCARE_QUIET_DB = -4   # os 4 s antes ficam abaixo da fala normal
+SCARE_LOUD_DB = 8     # e o salto passa bem da fala normal (só voltar a falar depois de uma pausa não conta)
+
+
+def scare_times(db: np.ndarray, base: float) -> list[tuple[float, float, float]]:
+    """(segundo, salto em dB, nível dos 4 s antes) dos sustos prováveis, no máximo um a cada 3 s."""
+    out: list[tuple[float, float, float]] = []
+    before_n, after_n = int(4 / HOP), int(2 / HOP)
+    i = before_n
+    while i < len(db) - 1:
+        before = float(np.median(db[i - before_n:i - 1]))
+        after = db[i:i + after_n]
+        top = float(after.max())
+        if before <= base + SCARE_QUIET_DB and top >= base + SCARE_LOUD_DB and top - before >= SCARE_JUMP:
+            k = i + int(np.argmax(after > before + 6))  # onde o som começa a subir
+            out.append((round(k * HOP, 2), round(top - before, 1), round(before - base, 1)))
+            i = k + int(3 / HOP)
+            continue
+        i += 1
+    return out
+
+
+def _mark_scares(events: list[dict], db: np.ndarray, base: float) -> None:
+    """Marca como "susto" o pico que vem de um silêncio (ou cria o evento, se o pico não foi listado)."""
+    for t, jump, before in scare_times(db, base):
+        near = [e for e in events if e["kind"] in ("grito", "som_alto") and t - 0.75 <= e["t"] <= t + 2]
+        if near:
+            near[0].update(kind="susto", jump=jump, t=min(near[0]["t"], t))
+        else:
+            events.append({"t": t, "dur": 1.0, "kind": "susto", "db": round(jump + before, 1), "jump": jump})
+
+
 def audio_events(loud: list[float], words: list[dict]) -> list[dict]:
     """Picos de volume e trechos sem fala, relativos ao nível normal de fala do próprio vídeo."""
     if not loud:
@@ -78,6 +114,7 @@ def audio_events(loud: list[float], words: list[dict]) -> list[dict]:
             "db": round(float(db[seg].max() - base), 1),
         })
         i = j + 1
+    _mark_scares(events, db, base)
 
     # 2) intervalos entre palavras: silêncio de choque ou barulho sem fala (risada, jogo)
     starts = [w["s"] for w in words]
@@ -97,6 +134,7 @@ def audio_events(loud: list[float], words: list[dict]) -> list[dict]:
 
 
 LABELS = {
+    "susto": "😱 SUSTO PROVÁVEL: silêncio e de repente som alto",
     "grito": "🔊 fala muito alta/grito",
     "som_alto": "💥 som alto SEM fala (risada, grito ou som do jogo)",
     "sem_fala_com_som": "🎮 sem fala mas com som (risada, reação ou jogo rolando)",
@@ -105,8 +143,13 @@ LABELS = {
 
 
 def describe(event: dict) -> str:
-    extra = f", +{event['db']:.0f} dB" if event["kind"] in ("grito", "som_alto") else ""
+    extra = f", +{event['db']:.0f} dB" if event["kind"] in LOUD_KINDS else ""
+    if event["kind"] == "susto":
+        extra += f", salto de {event.get('jump', 0):.0f} dB vindo de um trecho baixo"
     return f"[{event['t']:.2f}] <{LABELS[event['kind']]} por {event['dur']:.1f}s{extra}>"
+
+
+LOUD_KINDS = ("grito", "som_alto", "susto")
 
 
 def window(loud: list[float], start: float, end: float) -> list[float]:

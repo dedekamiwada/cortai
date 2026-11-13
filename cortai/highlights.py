@@ -65,7 +65,7 @@ def scan_prompt(sheets: list[tuple[Path, float, float]], events: list[dict], cou
         parts.append(f"Pedido do streamer (prioridade máxima): {extra}")
     parts.append("Folhas:")
     parts += [f"- {p.name}: de {a:.0f}s a {b:.0f}s" for p, a, b in sheets]
-    peaks = [signals.describe(e) for e in events if e["kind"] in ("grito", "som_alto")]
+    peaks = [signals.describe(e) for e in events if e["kind"] in signals.LOUD_KINDS]
     parts += ["", "Picos do som:", "\n".join(peaks[:200]) or "(nenhum)"]
     parts.append('\nResponda somente com JSON {"clips": [{"title", "start", "end", "peak", "hook", "reason", "score", "hashtags"}]}.')
     return "\n".join(parts)

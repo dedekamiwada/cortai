@@ -42,6 +42,22 @@ Cada clipe sai com uma **capa pronta** em 1080x1920 (`capa/capa.jpg`), feita do 
 - O `.zip` leva a capa de cada clipe. Projetos antigos: botão **🖼 Gerar capas** (live vertical: quadros do vídeo original; horizontal: do clipe pronto, com a legenda dele, até salvar o clipe de novo).
 - Padrões em **Mais opções** do formulário (ligar/desligar, estilo, assinatura, capa no vídeo) ou marcando "usar como padrão" no editor.
 
+## Estilo Terror
+
+Estilo de corte embutido (**Estilo de corte → Terror**), destilado de 11 cortes de terror do TikTok com mais de 300 mil views cada:
+
+- **Guia para o Claude.** O formato padrão é o susto único: 15–45 s, com o susto entre 40% e 80% do corte. O corte começa na fala irônica ("tá tranquilo", "nem dá medo"), quando houver, ou no começo da tensão. O silêncio antes do susto nunca é cortado, e 20–60% do corte fica para a reação. A **corrida de sustos** (50–75 s) só entra quando 3 ou mais sustos vêm colados. O guia também traz os 3 tipos de título de gancho.
+- **Receita**: ao escolher o estilo, o formulário recebe as opções dele, e você pode mudar depois:
+  - duração de 15 a 75 s, legenda Minimalista no meio com palavra-chave vermelha;
+  - título só no começo, na faixa do meio;
+  - sem cortar pausas, com o pós-susto "congelar no grito" e capa no estilo Grito.
+- **😱 Susto provável** nos sinais de áudio (`signals.py`): o volume salta 15 dB ou mais vindo de 4 s mais baixos e passa bem do nível normal da fala. Quem fala sem parar ou já tem música por baixo não tem esse salto; aí quem acha o susto é a revisão visual.
+- **Depois do susto** (opção de qualquer projeto, por clipe no editor): do susto até o fim, a imagem **congela no grito** (com um leve zoom no rosto), fica **preto e branco**, ou os dois.
+  - O início é a reação marcada logo depois do `peak`, ou o `peak` + 0,7 s.
+  - Só entra se o susto cair depois de 30% do clipe e sobrarem de 1,5 a 20 s depois dele.
+  - Os quadros da capa são tirados antes do efeito.
+- **Música no pós-susto** (opcional): uma música da pasta `musicas/pos_susto` da biblioteca entra no susto, e o som da live abaixa para 35%. Ponha ali só músicas que você tem direito de usar. Para músicas famosas, deixe desligado e adicione o som pelo app do TikTok.
+
 ## Melhores momentos da partida
 
 No formulário, **Tipo de projeto → Melhores momentos da partida (1 vídeo)**. Em vez de vários cortes soltos, sai um vídeo só com os melhores lances da partida, em **duas versões**: short vertical de 60–90 s e horizontal (YouTube), cada uma com um **roteiro de narração** (.txt e .srt com o tempo de cada fala) para você gravar por cima no CapCut.

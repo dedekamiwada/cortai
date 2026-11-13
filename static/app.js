@@ -109,12 +109,35 @@ function readFields(root, names) {
 }
 const COVER_FIELDS = ["cover_auto", "cover_style", "cover_handle", "cover_in_video"];
 const STYLE_FIELDS = ["layout", "caption_preset", "caption_position", "caption_color", "keyword_color", "title_mode",
-  "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio", "voice_enhance"];
+  "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio", "voice_enhance",
+  "pos_susto", "pos_susto_musica"];
 
 // ---------------------------------------------------------------- estilos
+let styleCache = [];
+const RECIPE_LABELS = {
+  caption_preset: () => "legenda pequena",
+  title_mode: (v) => (v === "hook" ? "título só no começo" : ""), remove_pauses: (v) => (v ? "" : "sem cortar pausas"),
+  pos_susto: (v) => ({ congelar: "congela no grito", pb: "P&B no susto", congelar_pb: "congela + P&B no susto" }[v] || ""),
+  cover_style: (v) => `capa ${v}`,
+};
+// estilo com receita (ex.: Terror) preenche as opções do formulário; dá para mudar depois
+function applyRecipe() {
+  const st = styleCache.find((s) => s.id === $("#style-select").value);
+  const box = $("#style-recipe");
+  if (!st?.recipe) { box.classList.add("hidden"); return; }
+  fillFields($("#job-form"), st.recipe);
+  const r = st.recipe;
+  const bits = [r.min_len && r.max_len ? `clipes de ${r.min_len} a ${r.max_len} s` : "",
+    ...Object.entries(r).filter(([k]) => !["min_len", "max_len"].includes(k)).map(([k, v]) => RECIPE_LABELS[k]?.(v))].filter(Boolean);
+  box.textContent = `Receita do estilo aplicada nas opções: ${bits.join(", ")}. Dá para mudar em "Mais opções".`;
+  box.classList.remove("hidden");
+}
+$("#style-select").addEventListener("change", applyRecipe);
+
 async function loadStyles() {
   clearTimeout(stylePoll);
   const list = await api("/api/styles");
+  styleCache = list;
   const sel = $("#style-select");
   const current = sel.value;
   sel.innerHTML = `<option value="">Nenhum (critérios gerais)</option>` + list
@@ -511,6 +534,7 @@ function fillClip(el, c) {
   if (c.zooms_applied) extras.push(`${c.zooms_applied} zoom${c.zooms_applied > 1 ? "s" : ""}`);
   if (c.removed > 0.2) extras.push(`−${c.removed.toFixed(1)}s de pausas`);
   if (c.manual) extras.push("manual");
+  if (c.pos_susto_at != null) extras.push(`pós-susto em ${c.pos_susto_at.toFixed(0)}s`);
   $(".layout", el).textContent = c.layout ? `· ${extras.filter(Boolean).join(" · ")}` : "";
   $(".breakdown", el).innerHTML = Object.entries(c.scores || {})
     .map(([k, v]) => `<span>${SCORE_NAMES[k] || k} <b>${v}</b></span>`).join("");
@@ -707,6 +731,13 @@ async function openEditor(jobId, n) {
   $("#ed-title-style").value = o.title_style || "impacto";
   $("#ed-zoom").checked = o.auto_zoom !== false;
   $("#ed-pauses").checked = !!o.remove_pauses;
+  $("#ed-pos").value = o.pos_susto || "";
+  $("#ed-pos-music").checked = !!o.pos_susto_musica;
+  const c0 = data.clip;
+  $("#ed-pos-info").textContent = c0.pos_susto_at != null
+    ? `Começa em ${c0.pos_susto_at.toFixed(1)} s do clipe (no susto marcado)` + (c0.pos_susto_music ? ` · música: ${c0.pos_susto_music}` : "")
+    : o.pos_susto ? "Não entrou neste clipe: o susto marcado cai cedo demais ou sobra menos de 1,5 s (ou mais de 20 s) depois dele."
+    : "Do susto até o fim, a imagem congela no grito e/ou fica preto e branco. Para a música, ponha arquivos que você tem direito de usar na pasta musicas/pos_susto da biblioteca.";
   $("#ed-keywords").checked = o.keyword_highlight !== false;
   $("#ed-kwcolor").value = o.keyword_color || "#39E75F";
   const kws = data.clip.keywords || [];
@@ -1166,6 +1197,7 @@ $("#ed-save").onclick = async () => {
     caption_upper: $("#ed-upper").checked, title_overlay: $("#ed-title-on").checked,
     title_mode: $("#ed-title-mode").value, title_position: $("#ed-title-pos").value, title_style: $("#ed-title-style").value,
     auto_zoom: $("#ed-zoom").checked, remove_pauses: $("#ed-pauses").checked,
+    pos_susto: $("#ed-pos").value, pos_susto_musica: $("#ed-pos-music").checked,
     keyword_highlight: $("#ed-keywords").checked, keyword_color: $("#ed-kwcolor").value,
     word_fixes: ed.fixes,
     word_adds: ed.adds.map(({ w, s, e }) => ({ w, s, e })),

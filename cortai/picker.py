@@ -121,6 +121,7 @@ CONTENT = {
 
 Em live de jogo o que viraliza é um ACONTECIMENTO (no jogo ou na câmera) + a REAÇÃO do streamer — não uma \
 frase solta. A transcrição só mostra fala, então ela vem intercalada com marcadores de áudio:
+- 😱 susto provável: silêncio e de repente som alto (jumpscare, explosão) — o candidato mais forte a pico;
 - 💥 som alto SEM fala: risada, grito, explosão/gol/morte no jogo — forte candidato a pico;
 - 🎮 intervalo sem fala mas com som: reação, risada longa ou jogo acontecendo;
 - 🤐 silêncio: choque, concentração ou tela parada;

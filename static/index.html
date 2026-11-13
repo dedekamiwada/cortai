@@ -59,6 +59,7 @@
           <select name="content_type"><option value="game">Live de jogo</option><option value="talk">Conversa / podcast</option></select>
         </label>
         <label class="field"><span>Estilo de corte</span><select name="style_id" id="style-select"></select></label>
+        <p class="hint hidden" id="style-recipe"></p>
         <label class="field"><span>Clipes</span><input name="num_clips" type="number" min="1" max="20" value="6"></label>
         <label class="field"><span>Duração mín. (s)</span><input name="min_len" type="number" min="5" max="170" value="15"></label>
         <label class="field"><span>Duração máx. (s)</span><input name="max_len" type="number" min="10" max="180" value="45"></label>
@@ -117,6 +118,8 @@
           <label class="field check"><input name="remove_pauses" type="checkbox"><span>Remover pausas mortas</span></label>
           <label class="field check"><input name="normalize_audio" type="checkbox" checked><span>Volume padrão das redes (-14 LUFS)</span></label>
           <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada (EQ + compressor)</span></label>
+          <label class="field"><span>Depois do susto <em>(terror)</em></span><select name="pos_susto"><option value="">Nenhum</option><option value="congelar">Congelar no grito</option><option value="pb">Preto e branco</option><option value="congelar_pb">Congelar + preto e branco</option></select></label>
+          <label class="field check"><input name="pos_susto_musica" type="checkbox"><span>Música no pós-susto <em>(pasta musicas/pos_susto)</em></span></label>
           <label class="field check"><input name="cover_auto" type="checkbox" checked><span>Capa (thumbnail) pronta em cada clipe</span></label>
           <label class="field"><span>Estilo da capa</span>
             <select name="cover_style"><option value="impacto">Impacto (Anton, contorno)</option><option value="faixa">Faixa vermelha (Bangers)</option><option value="caixa">Caixa branca (Montserrat)</option></select>
@@ -261,6 +264,8 @@
       <label class="field check"><input name="remove_pauses" type="checkbox"><span>Remover pausas mortas</span></label>
           <label class="field check"><input name="normalize_audio" type="checkbox" checked><span>Volume padrão das redes (-14 LUFS)</span></label>
           <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada (EQ + compressor)</span></label>
+      <label class="field"><span>Depois do susto</span><select name="pos_susto"><option value="">Nenhum</option><option value="congelar">Congelar no grito</option><option value="pb">Preto e branco</option><option value="congelar_pb">Congelar + preto e branco</option></select></label>
+      <label class="field check"><input name="pos_susto_musica" type="checkbox"><span>Música no pós-susto</span></label>
     </div>
     <label class="check"><input id="apply-default" type="checkbox"> Usar como padrão nos próximos projetos</label>
     <button class="primary" id="apply-btn">Aplicar e renderizar todos</button>
@@ -370,6 +375,12 @@
           <input id="ed-kwcolor" type="color">
         </div>
         <p class="muted small" id="ed-kwlist"></p>
+      </div>
+      <div class="ed-section">
+        <h4>Depois do susto <span class="muted small">(terror)</span></h4>
+        <select id="ed-pos"><option value="">Nenhum</option><option value="congelar">Congelar no grito</option><option value="pb">Preto e branco</option><option value="congelar_pb">Congelar + preto e branco</option></select>
+        <label class="check"><input id="ed-pos-music" type="checkbox"> Música da biblioteca a partir do susto</label>
+        <p class="muted small" id="ed-pos-info"></p>
       </div>
     </div>
     <div class="ed-timeline">
