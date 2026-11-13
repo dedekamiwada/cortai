@@ -49,6 +49,8 @@ DEFAULT_OPTS = {
     "voice_enhance": True,
     "mode": "clips",                   # "clips" (vários cortes) ou "highlights" (melhores momentos num vídeo)
     "highlight_basis": "fala_imagem",  # "fala_imagem" ou "imagem"
+    "pos_susto": "",                   # terror: "congelar", "pb" ou "congelar_pb" do susto até o fim
+    "pos_susto_musica": False,         # trilha da biblioteca (musicas/pos_susto) a partir do susto
     "cover_auto": True,                # capa (thumbnail) pronta para cada clipe
     "cover_style": capa.DEFAULT_STYLE,
     "cover_handle": "",                # ex.: @_saitox_, escrito embaixo do título da capa
@@ -59,7 +61,7 @@ DEFAULT_OPTS = {
 STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color", "caption_upper",
               "caption_position", "keyword_highlight", "keyword_color", "title_overlay", "title_mode",
               "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio",
-              "voice_enhance")
+              "voice_enhance", "pos_susto", "pos_susto_musica")
 CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds")
 COVER_KEYS = ("cover_auto", "cover_style", "cover_handle", "cover_in_video")  # padrões da capa
 SETTINGS_FILE = JOBS_DIR / "_settings.json"
@@ -435,7 +437,7 @@ def _run_highlights(job_id: str) -> None:
     def context(a: float, b: float) -> str:
         if transcript["segments"]:
             return picker.format_transcript(transcript, events, a, b)
-        return "\n".join(signals.describe(e) for e in events if a <= e["t"] <= b and e["kind"] in ("grito", "som_alto"))
+        return "\n".join(signals.describe(e) for e in events if a <= e["t"] <= b and e["kind"] in signals.LOUD_KINDS)
 
     update(job_id, progress=0.0, message=f"Claude assistindo aos {len(candidates)} lances e escrevendo o roteiro…")
     raw = picker.ask(backend, highlights.REVIEW_SYSTEM,
@@ -679,7 +681,7 @@ def _edit_plan(job_id: str, clip: dict, opts: dict, words: list[dict]) -> tuple[
         zooms = [r for r in clip.get("reactions") or [] if start <= r <= end]
         if not zooms and loud:  # sem dica do Claude: usa o maior pico de volume do trecho
             peaks = [e for e in signals.audio_events(loud, words)
-                     if start <= e["t"] <= end and e["kind"] in ("grito", "som_alto") and e["db"] >= 9]
+                     if start <= e["t"] <= end and e["kind"] in signals.LOUD_KINDS and e["db"] >= 9]
             if peaks:
                 zooms = [max(peaks, key=lambda e: e["db"])["t"]]
     keep = None
@@ -699,6 +701,8 @@ def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     opts = {**job["options"], **clip.get("overrides", {})}
     opts.setdefault("title_text", clip["title"])
     opts["keywords"] = clip.get("keywords") or []
+    if opts.get("pos_susto") and opts.get("pos_susto_musica"):
+        opts["_pos_music"] = pos_susto_music(clip["n"])
     try:
         # legenda manual conta como fala: o corte de pausas não apaga o trecho dela
         keep, zooms = _edit_plan(job_id, clip, opts, captions.with_adds(words, opts.get("word_adds")))
@@ -750,7 +754,7 @@ def _apex_index(job_id: str, clip: dict, found: list[Path], origin: str, words: 
     if loud_file.exists() and not clip.get("peak") and not clip.get("reactions"):
         words = words if words is not None else _words(job_id)
         events = [e for e in signals.audio_events(json.loads(loud_file.read_text(encoding="utf-8")), words)
-                  if e["kind"] in ("grito", "som_alto")]
+                  if e["kind"] in signals.LOUD_KINDS]
     rel = capa.apex_time(clip, events) - clip["start"]
     if origin != "original" and clip.get("time_map"):  # quadros no tempo do vídeo final (com jump cuts)
         rel = edit.TimeMap([tuple(k) for k in clip["time_map"]]).to_out(rel)
@@ -904,6 +908,19 @@ def make_missing_covers(job_id: str) -> int:
         update(job_id, status="done", progress=1.0, message=f"{len(todo)} capas prontas")
     _worker.submit(run)
     return len(todo)
+
+
+def pos_susto_music(n: int) -> str | None:
+    """Uma música de musicas/pos_susto da biblioteca (o usuário põe ali só o que tem direito de usar);
+    clipes seguidos pegam músicas diferentes."""
+    from . import posedit  # importado aqui: posedit importa jobs
+    folder = posedit.library_dir() / "musicas" / "pos_susto"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    files = sorted(f for f in folder.iterdir() if f.suffix.lower() in posedit.AUDIO_EXT)
+    return str(files[(n - 1) % len(files)]) if files else None
 
 
 def studio_tracks(job_id: str, n: int, seg_start: float, asset_id: str) -> dict:

@@ -43,6 +43,56 @@ Padrões observados em cortes de canais de cortes de streamers brasileiros com c
 }
 
 
+TERROR = {
+    "id": "terror",
+    "name": "Terror (sustos e reações)",
+    "builtin": True,
+    "status": "ready",
+    "summary": "Destilado de 11 cortes de terror com mais de 300 mil views: susto único com ironia antes e "
+               "reação depois; corrida de sustos quando vários vêm colados.",
+    "sources": ["11 cortes de terror do TikTok (vanquilha01, cortesloudcoringa, capivatmancortes, kahperezlives, "
+                "cortesloudyayah, chocomomentss, tiktokbistecone, pv.aguiar021, memes_br.0, ldcortes_10)"],
+    # aplicada no formulário quando o estilo é escolhido (o usuário ainda pode mudar)
+    "recipe": {
+        "min_len": 15, "max_len": 75, "content_type": "game",
+        "caption_preset": "minimal", "caption_position": "middle", "keyword_color": "#E61E28",
+        "title_overlay": True, "title_mode": "hook", "title_position": "band",
+        "auto_zoom": True, "remove_pauses": False,
+        "pos_susto": "congelar", "cover_style": "grito",
+    },
+    "guide": """\
+Padrões de 11 cortes de terror de streamers com mais de 300 mil views cada:
+
+O SUSTO quase nunca é fala: é um pico de som (+14 a +21 dB) logo depois de 2 a 4 s mais baixos, com o monstro
+aparecendo e a cara do streamer reagindo. Os marcadores 😱 (silêncio e de repente som alto) e 💥 são os candidatos
+mais fortes. Quem fala o tempo todo não tem pico que se destaque: aí vale a cara de susto e o grito na fala.
+
+FORMATO PADRÃO, susto único (7 de 11): 15 a 45 s, mediana 35 s.
+- O susto cai entre 40% e 80% do corte (mediana 62%), nunca nos primeiros segundos. Na prática: 10 a 25 s de
+  tensão antes, não só 5 s.
+- Comece na IRONIA quando houver (5 de 11): a fala ou situação de "está tudo tranquilo" que o susto vai desmentir
+  ("eu gosto quando o jogo tem física", "tá morta, tá tranquilo", "vou jogar pra relaxar", "nem dá medo"). Sem
+  ironia, comece quando a tensão começa (porta, corredor escuro, barulho, "tô ouvindo passos").
+- NÃO corte o silêncio antes do susto: a espera é a tensão.
+- Deixe 20% a 60% do corte (mediana 37%) para DEPOIS do susto: pulo na cadeira, grito, cara congelada, levantar e
+  sair, riso nervoso, xingamento.
+- Termine na reação ou na punchline ("me caguei", "eu não tive culpa", "cê é doido"). Cortar seco no próprio
+  susto também funciona quando a imagem fica forte (cadeira vazia, monstro parado).
+
+FORMATO LONGO, corrida de sustos (só quando 3+ sustos vêm em até ~70 s na mesma partida): 50 a 75 s, um susto a cada
+10 a 15 s, terminando no maior. Não use para um susto só esticado.
+
+`peak` = o segundo exato do susto (o pico de som ou o monstro aparecendo). `reactions` = a cara no susto e logo
+depois. Prefira o susto com reação visível na câmera a um susto em que ele nem reage.
+
+TÍTULO de gancho (aparece nos primeiros segundos, 7 de 11), curto, de um destes tipos: descreve o monstro ou o perigo
+("ELA NÃO PARAVA DE CRESCER 💀", "Não olhe pra cima!"); a frase irônica que o vídeo desmente ("jogo de terror com
+arma nem dá medo..", "POV: vou jogar pra relaxar um pouco"); ou promessa ("FOI CADA SUSTO AQUI").
+""",
+}
+BUILTINS = [BUILTIN, TERROR]
+
+
 def _dir(root: Path) -> Path:
     d = root / "_styles"
     d.mkdir(exist_ok=True)
@@ -50,7 +100,7 @@ def _dir(root: Path) -> Path:
 
 
 def list_styles(root: Path) -> list[dict]:
-    out = [BUILTIN]
+    out = list(BUILTINS)
     for f in sorted(_dir(root).glob("*.json")):
         try:
             out.append(json.loads(f.read_text(encoding="utf-8")))
@@ -73,8 +123,8 @@ def save(root: Path, style: dict) -> None:
 
 
 def delete(root: Path, style_id: str) -> None:
-    if style_id == BUILTIN["id"]:
-        raise ValueError("o estilo embutido não pode ser excluído")
+    if any(b["id"] == style_id for b in BUILTINS):
+        raise ValueError("os estilos embutidos não podem ser excluídos")
     (_dir(root) / f"{style_id}.json").unlink(missing_ok=True)
     shutil.rmtree(_dir(root) / style_id, ignore_errors=True)
 

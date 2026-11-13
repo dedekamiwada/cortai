@@ -25,6 +25,12 @@ OUT_W, OUT_H = 1080, 1920
 SPLIT_TOP = 768  # altura do painel da webcam; o jogo fica com 1152
 ZOOM = 1.32
 ZOOM_HOLD = 1.4
+# Pós-susto (estilo terror): do susto até o fim do clipe a imagem congela no grito e/ou vira preto e branco,
+# como nos cortes de terror que viralizam. Só entra se o susto cair depois de 30% do clipe e sobrar de
+# 1,5 a 20 s depois dele (num clipe de corrida de sustos isso costuma ser o último e maior).
+POS_SUSTO = {"congelar": "Congelar no grito", "pb": "Preto e branco", "congelar_pb": "Congelar + preto e branco"}
+POS_MIN_FRAC, POS_MIN_AFTER, POS_MAX_AFTER = 0.3, 1.5, 20.0
+FREEZE_ZOOM = 1.18
 LOUDNESS, TRUE_PEAK = -14, -2.0  # TikTok/Reels/Shorts; pico com folga porque o AAC sobe os picos ~1 dB
 # Voz destacada: tira o grave abafado (250 Hz), realça a presença (3,2 kHz) e o ar, comprime e segura o
 # pico do grito. Testado num corte de live: a faixa dinâmica caiu de 8 para ~5 LU sem estourar.
@@ -55,6 +61,17 @@ def _run_encode(args_before_enc: list[str], args_after_enc: list[str], cwd: Path
             return
         error = proc.stderr[-1500:]
     raise RuntimeError(f"ffmpeg falhou ao renderizar: {error}")
+
+
+def scare_time(clip: dict) -> float | None:
+    """Segundo (vídeo original) em que o pós-susto começa: a cara reagindo logo depois do pico do Claude;
+    sem reação marcada, um instante depois do pico (o grito costuma vir ~0,5–1 s depois do susto)."""
+    peak = clip.get("peak")
+    if peak is None:
+        return None
+    peak = float(peak)
+    near = sorted(float(r) for r in clip.get("reactions") or [] if peak - 0.3 <= float(r) <= peak + 2.5)
+    return near[0] if near else peak + 0.7
 
 
 def encode(args_before_enc: list[str], args_after_enc: list[str], cwd: Path) -> None:
@@ -221,11 +238,45 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
     frames_dir = out_dir / "capa" / "quadros"
     shutil.rmtree(frames_dir, ignore_errors=True)
     frames_dir.mkdir(parents=True, exist_ok=True)
-    chain += (f";[{last}]split=2[pv][cv];[pv]null{subs}[v];"
+    chain += (f";[{last}]split=2[pv][cv];"
               f"[cv]fps={1 / capa.FRAME_STEP:g},scale={capa.FRAME_W}:{capa.FRAME_H}:flags=bicubic[cq]")
+    main = "pv"
+
+    # ---- pós-susto: congela o quadro do grito e/ou preto e branco, do susto até o fim
+    pos = opts.get("pos_susto") or ""
+    pos_at = None
+    if pos in POS_SUSTO and scare_time(clip) is not None:
+        t = tm.to_out(scare_time(clip) - start)
+        if t >= out_dur * POS_MIN_FRAC and POS_MIN_AFTER <= out_dur - t <= POS_MAX_AFTER:
+            pos_at = t
+    if pos_at is not None:
+        if pos.startswith("congelar"):  # quadro do grito parado, um pouco mais perto do rosto
+            fw, fh = _even(OUT_W / FREEZE_ZOOM), _even(OUT_H / FREEZE_ZOOM)
+            fx = int(min(max(face_out[0] * OUT_W - fw / 2, 0), OUT_W - fw))
+            fy = int(min(max(face_out[1] * OUT_H - fh * 0.4, 0), OUT_H - fh))
+            chain += (f";[{main}]split=2[fa][fb];[fa]trim=end={pos_at:.3f},setpts=PTS-STARTPTS[fa1];"
+                      f"[fb]trim=start={pos_at:.3f},setpts=PTS-STARTPTS,trim=end_frame=1,"
+                      f"crop={fw}:{fh}:{fx}:{fy},scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1,"
+                      f"tpad=stop_mode=clone:stop_duration={out_dur - pos_at + 0.5:.3f}[fb1];"
+                      f"[fa1][fb1]concat=n=2:v=1:a=0[fz]")
+            main = "fz"
+        if pos.endswith("pb"):
+            on = f"enable='gte(t,{pos_at:.3f})'"
+            chain += f";[{main}]hue=s=0:{on},eq=contrast=1.15:brightness=-0.02:{on}[bw]"
+            main = "bw"
+    music = opts.get("_pos_music") if pos_at is not None and has_audio else None
+    if music:  # trilha do pós-susto da biblioteca: entra no susto e abaixa o som da live
+        d = out_dur - pos_at
+        chain += (f";[{ain}]volume='if(gte(t,{pos_at:.3f}),0.35,1)':eval=frame[duck];"
+                  f"[1:a]atrim=duration={d:.3f},asetpts=PTS-STARTPTS,volume=0.6,afade=t=in:d=0.2,"
+                  f"afade=t=out:st={max(0.0, d - 0.8):.3f}:d=0.8,adelay=delays={int(pos_at * 1000)}:all=1[mus];"
+                  f"[duck][mus]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[amx]")
+        ain = "amx"
+    chain += f";[{main}]null{subs}[v]"
 
     # -t antes do -i limita a LEITURA da live: sem isso a 2ª saída (quadros da capa) seguiria até o fim do vídeo
     base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(src),
+            *(["-stream_loop", "-1", "-i", str(music)] if music else []),
             "-t", f"{dur:.3f}", "-filter_complex", pre + chain, "-map", "[v]"]
     audio = []
     if has_audio:
@@ -245,6 +296,8 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         "voice_enhanced": has_audio and voice,
         "srt": "clip.srt",
         "time_map": [[round(a, 3), round(b, 3)] for a, b in tm.keep],
+        "pos_susto_at": round(pos_at, 2) if pos_at is not None else None,
+        "pos_susto_music": Path(music).name if music else None,
     }
 
 
