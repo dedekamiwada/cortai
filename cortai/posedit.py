@@ -158,7 +158,7 @@ def create(local_path: str = "", job_id: str = "", n: int | None = None, instruc
         clip = next((c for c in (job or {}).get("clips", []) if c["n"] == n), None)
         if not clip or clip.get("status") != "done":
             raise ValueError("o clipe precisa estar renderizado")
-        src = paths.JOBS_DIR / clip["file"]
+        src = jobs.plain_clip(clip["file"])
         name = clip["title"]
     else:
         src = Path(local_path.strip().strip('"'))

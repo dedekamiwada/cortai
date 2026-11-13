@@ -80,6 +80,9 @@ async function loadConfig() {
     $$(".preset-select").forEach((sel) => {
       sel.innerHTML = Object.entries(cfg.caption_presets).map(([k, label]) => `<option value="${k}">${label}</option>`).join("");
     });
+    $$("select[name=cover_style]").forEach((sel) => {
+      sel.innerHTML = Object.entries(cfg.cover_styles || {}).map(([k, label]) => `<option value="${k}">${label}</option>`).join("");
+    });
     // padrões (de fábrica + os salvos pelo usuário) no formulário e no painel "estilo de todos"
     fillFields($("#job-form"), cfg.defaults);
     fillFields($("#apply-form"), cfg.defaults);
@@ -104,6 +107,7 @@ function readFields(root, names) {
   }
   return out;
 }
+const COVER_FIELDS = ["cover_auto", "cover_style", "cover_handle", "cover_in_video"];
 const STYLE_FIELDS = ["layout", "caption_preset", "caption_position", "caption_color", "keyword_color", "title_mode",
   "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio", "voice_enhance"];
 
@@ -199,7 +203,7 @@ $("#job-form").addEventListener("submit", async (e) => {
     mode: f.mode.value, highlight_basis: f.highlight_basis.value,
     range_start: parseTime(f.range_start.value), range_end: parseTime(f.range_end.value),
     language: f.language.value, backend: f.backend.value, whisper_model: f.whisper_model.value,
-    ...readFields(f, STYLE_FIELDS),
+    ...readFields(f, STYLE_FIELDS), ...readFields(f, COVER_FIELDS),
   };
   const body = new FormData();
   body.append("options", JSON.stringify(options));
@@ -310,6 +314,7 @@ function renderJob(job) {
   $("#job-tools").classList.toggle("hidden", !ready);
   if (!ready) $$(".panel").forEach((p) => p.classList.add("hidden"));
   $("#zip-btn").href = `/api/jobs/${job.id}/export.zip`;
+  $("#covers-btn").classList.toggle("hidden", !job.clips.some((c) => c.status === "done" && !c.cover));
   renderMatches(job);
   renderHighlight(job);
   renderClips(job);
@@ -527,14 +532,38 @@ function fillClip(el, c) {
   const frames = $(".frames", el);
   frames.classList.toggle("hidden", !c.review_image);
   if (c.review_image) frames.href = `/media/${c.review_image}`;
+  fillCover(el, c, done);
   $(".edit", el).disabled = !(done || c.status === "error");
   $(".posedit", el).disabled = !done;
   $(".clip-error", el).textContent = c.error || "";
   el._clip = c;
 }
 
+function fillCover(el, c, done) {
+  const row = $(".cover-row", el);
+  row.classList.toggle("hidden", !done);
+  if (!done) return;
+  const has = !!c.cover_file;
+  const src = has ? `/media/${c.cover_file}?v=${c.cover_rev || 0}` : "";
+  const img = $(".cover-thumb img", el);
+  $(".cover-thumb", el).classList.toggle("empty", !has);
+  img.classList.toggle("hidden", !has);
+  if (has && img.dataset.src !== src) { img.dataset.src = src; img.src = src; }
+  const dl = $(".cover-dl", el);
+  dl.classList.toggle("hidden", !has);
+  dl.href = src;
+  dl.download = `${String(c.n).padStart(2, "0")}-capa.jpg`;
+  $(".cover-edit", el).textContent = has ? "🖼 Editar capa" : "🖼 Fazer capa";
+  $(".cover-note", el).textContent = c.cover_error ? `Erro: ${c.cover_error}`
+    : !has ? "Este clipe ainda não tem capa."
+    : c.cover?.in_video ? "1080×1920 · também no fim do vídeo"
+    : "1080×1920 · suba no “Editar capa” do TikTok";
+}
+
 function bindClip(el, jobId, n) {
   $(".edit", el).onclick = () => openEditor(jobId, n);
+  $(".cover-edit", el).onclick = () => openCover(jobId, n);
+  $(".cover-thumb", el).onclick = () => openCover(jobId, n);
   $(".copy", el).onclick = async (e) => {
     const c = el._clip;
     await navigator.clipboard.writeText(c.post || `${c.title}\n\n${(c.hashtags || []).join(" ")}`);
@@ -610,6 +639,12 @@ $("#retitle-btn").onclick = async () => {
   } catch (ex) {
     alert(ex.message);
   }
+};
+$("#covers-btn").onclick = async () => {
+  try {
+    await postJSON(`/api/jobs/${currentJob.id}/capas`, {});
+    openJob(currentJob.id);
+  } catch (ex) { alert(ex.message); }
 };
 $("#delete-job").onclick = async () => {
   if (!confirm("Excluir este projeto e os clipes gerados?")) return;
@@ -1148,3 +1183,196 @@ $("#ed-save").onclick = async () => {
 };
 
 loadConfig().then(route);
+
+// ================================================================ capa (thumbnail)
+const cdlg = $("#cover-dlg");
+let cv = null;  // { jobId, n, info, p (parâmetros), timer, abort, url }
+const CV_FIELDS = { text: "#cv-text", style: "#cv-style", upper: "#cv-upper", size: "#cv-size", tilt: "#cv-tilt",
+  dark: "#cv-dark", handle: "#cv-handle", zoom: "#cv-zoom", px: "#cv-px", py: "#cv-py" };
+
+async function openCover(jobId, n) {
+  cv = null;
+  $("#cv-error").textContent = "";
+  $("#cv-loading").textContent = "Preparando a capa…";
+  $("#cv-loading").classList.remove("hidden");
+  $("#cv-body").classList.add("hidden");
+  $("#cv-save").disabled = true;
+  cdlg.showModal();
+  let info;
+  try {
+    info = await api(`/api/jobs/${jobId}/clips/${n}/capa`);
+    if (!info.cover) {
+      $("#cv-loading").textContent = "Escolhendo o momento ápice e fazendo a capa…";
+      info = await postJSON(`/api/jobs/${jobId}/clips/${n}/capa`, {});
+    }
+  } catch (ex) {
+    $("#cv-loading").textContent = `Não deu para abrir a capa: ${ex.message}`;
+    return;
+  }
+  cv = { jobId, n, info, p: { ...info.cover }, timer: null, abort: null, url: null };
+  $("#cv-sub").textContent = info.title;
+  $("#cv-style").innerHTML = Object.entries(info.styles).map(([k, label]) => `<option value="${k}">${label}</option>`).join("");
+  for (const [k, sel] of Object.entries(CV_FIELDS)) {
+    const el = $(sel);
+    if (el.type === "checkbox") el.checked = cv.p[k] !== false;
+    else el.value = cv.p[k] ?? "";
+  }
+  syncColors();
+  syncRangeValues();
+  $("#cv-invideo").checked = !!info.in_video;
+  $("#cv-default").checked = false;
+  const chips = [...new Set([info.title, ...(info.title_options || [])])].filter(Boolean);
+  $("#cv-chips").replaceChildren(...chips.map((t) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = t;
+    b.title = "Usar este texto na capa";
+    b.onclick = () => { $("#cv-text").value = t; cvChanged("text"); };
+    return b;
+  }));
+  const origin = { original: "Quadros tirados do vídeo original (sem legenda).",
+    clipe: "Quadros tirados do clipe pronto, com a legenda dele. Salve o clipe no editor de novo para ter quadros limpos." }[info.origin];
+  $("#cv-origin").textContent = origin || "";
+  $("#cv-origin").classList.toggle("hidden", !origin);
+  renderCoverFrames();
+  setCoverImage(`/media/${info.file}?v=${info.rev}`);
+  $("#cv-download").href = `/media/${info.file}?v=${info.rev}`;
+  $("#cv-download").download = `${String(n).padStart(2, "0")}-capa.jpg`;
+  $("#cv-loading").classList.add("hidden");
+  $("#cv-body").classList.remove("hidden");
+  $("#cv-save").disabled = false;
+}
+
+// número ao lado de cada barra do editor de capa
+const CV_FORMAT = {
+  "cv-size": (v) => `${Math.round(v * 100)}%`,
+  "cv-tilt": (v) => `${v > 0 ? "+" : ""}${Math.round(v)}°`,
+  "cv-dark": (v) => `${Math.round(v * 100)}%`,
+  "cv-zoom": (v) => `${v.toFixed(2).replace(".", ",")}x`,
+  "cv-px": (v) => `${Math.round(v * 100)}%`,
+  "cv-py": (v) => `${Math.round(v * 100)}%`,
+};
+function syncRangeValues() {
+  $$("#cover-dlg .cv-val").forEach((b) => { b.textContent = CV_FORMAT[b.dataset.for](+$(`#${b.dataset.for}`).value); });
+}
+$$("#cover-dlg input[type=range]").forEach((el) => el.addEventListener("input", syncRangeValues));
+
+function syncColors() {
+  const st = cv.info.style_colors[cv.p.style] || {};
+  $("#cv-color").value = cv.p.color || st.text || "#FFFFFF";
+  $("#cv-hl").value = cv.p.hl_color || st.hl || "#FFD400";
+}
+
+function renderCoverFrames() {
+  const { frames, step, cover } = cv.info;
+  $("#cv-frames").replaceChildren(...frames.map((f, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = (i === cv.p.frame ? "on " : "") + (i === cover.apex ? "apex" : "");
+    b.title = i === cover.apex ? "Momento ápice (escolhido pelo Cortaí)" : `${(i * step).toFixed(1)} s`;
+    b.innerHTML = `<img loading="lazy" alt=""><span>${(i * step).toFixed(1).replace(".", ",")} s</span>`;
+    $("img", b).src = `/media/${f}`;
+    b.onclick = () => { cv.p.frame = i; markFrame(); cvRefresh(); };
+    return b;
+  }));
+  requestAnimationFrame(() => $("#cv-frames .on")?.scrollIntoView({ block: "nearest", inline: "center" }));
+}
+
+function markFrame() {
+  $$("#cv-frames button").forEach((b, i) => b.classList.toggle("on", i === cv.p.frame));
+}
+
+function setCoverImage(src) {
+  if (cv?.url) URL.revokeObjectURL(cv.url);
+  if (cv) cv.url = src.startsWith("blob:") ? src : null;
+  $("#cv-img").src = src;
+}
+
+function cvChanged(key) {
+  if (!cv) return;
+  const el = $(CV_FIELDS[key]);
+  cv.p[key] = el.type === "checkbox" ? el.checked : el.type === "range" ? +el.value : el.value;
+  if (key === "style") { cv.p.color = null; cv.p.hl_color = null; syncColors(); }
+  cvRefresh();
+}
+for (const key of Object.keys(CV_FIELDS)) {
+  $(CV_FIELDS[key]).addEventListener("input", () => cvChanged(key));
+}
+$("#cv-color").addEventListener("input", (e) => { cv.p.color = e.target.value; cvRefresh(); });
+$("#cv-hl").addEventListener("input", (e) => { cv.p.hl_color = e.target.value; cvRefresh(); });
+$("#cv-colors-reset").onclick = () => { cv.p.color = null; cv.p.hl_color = null; syncColors(); cvRefresh(); };
+$("#cv-apex").onclick = () => { cv.p.frame = cv.info.cover.apex; markFrame(); renderCoverFrames(); cvRefresh(); };
+
+// prévia: desenhada pelo mesmo motor da capa final, com um pequeno atraso para não pedir a cada tecla
+function cvRefresh() {
+  clearTimeout(cv.timer);
+  cv.timer = setTimeout(async () => {
+    cv.abort?.abort();
+    const ctl = new AbortController();
+    cv.abort = ctl;
+    $("#cv-busy").classList.remove("hidden");
+    try {
+      const res = await fetch(`/api/jobs/${cv.jobId}/clips/${cv.n}/capa/previa`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(cv.p), signal: ctl.signal,
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      setCoverImage(URL.createObjectURL(await res.blob()));
+      $("#cv-error").textContent = "";
+    } catch (ex) {
+      if (ex.name !== "AbortError") $("#cv-error").textContent = ex.message;
+    } finally {
+      if (cv?.abort === ctl) $("#cv-busy").classList.add("hidden");
+    }
+  }, 140);
+}
+
+// arrastar na prévia move o texto para cima/baixo
+(() => {
+  const stage = $("#cv-stage");
+  let drag = null;
+  stage.addEventListener("pointerdown", (e) => {
+    if (!cv) return;
+    stage.setPointerCapture(e.pointerId);
+    drag = { y0: e.clientY, v0: cv.p.y, h: stage.getBoundingClientRect().height };
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    cv.p.y = Math.min(0.8, Math.max(0.18, drag.v0 + (e.clientY - drag.y0) / drag.h));
+    cvRefresh();
+  });
+  const end = () => { drag = null; };
+  stage.addEventListener("pointerup", end);
+  stage.addEventListener("pointercancel", end);
+})();
+
+async function saveCover() {
+  if (!cv) return;
+  const btn = $("#cv-save");
+  btn.disabled = true;
+  $("#cv-error").textContent = "";
+  try {
+    const body = { ...cv.p, in_video: $("#cv-invideo").checked };
+    delete body.apex; delete body.frames; delete body.auto_text; delete body.custom_text; delete body.custom_frame;
+    await postJSON(`/api/jobs/${cv.jobId}/clips/${cv.n}/capa`, body);
+    if ($("#cv-default").checked) {
+      await postJSON("/api/settings", { cover_style: cv.p.style, cover_handle: cv.p.handle || "", cover_in_video: body.in_video });
+      loadConfig();
+    }
+    const jobId = cv.jobId;
+    closeCover();
+    openJob(jobId);
+  } catch (ex) {
+    $("#cv-error").textContent = ex.message;
+    btn.disabled = false;
+  }
+}
+
+function closeCover() {
+  if (cv) { clearTimeout(cv.timer); cv.abort?.abort(); if (cv.url) URL.revokeObjectURL(cv.url); }
+  cv = null;
+  cdlg.close();
+}
+$("#cv-save").onclick = saveCover;
+$("#cv-cancel").onclick = closeCover;
+$("#cv-close").onclick = closeCover;
+cdlg.addEventListener("cancel", (e) => { e.preventDefault(); closeCover(); });

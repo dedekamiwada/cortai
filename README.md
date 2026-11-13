@@ -29,6 +29,19 @@ Para projetos que já estão prontos, o botão **🏷 Gerar títulos** pede ao C
 
 Aprendizado: cada título vai para `jobs/_titulos/titulos.csv` (abre no Excel). Depois de postar, preencha a coluna `views` (aceita `12000`, `12.000`, `12k`, `1,2 mil`). Quando houver pelo menos 2 fórmulas com 3 posts medidos ou mais, o prompt passa a dizer ao Claude quais fórmulas rendem mais no seu canal. Feche o CSV no Excel antes de rodar um job, senão a gravação daquele job é pulada.
 
+## Capa (thumbnail)
+
+Cada clipe sai com uma **capa pronta** em 1080x1920 (`capa/capa.jpg`), feita do **momento ápice** com o **título** por cima:
+
+- **Quadro**: a reação do rosto logo depois do pico que o Claude marcou (sem reação, o próprio pico; sem pico, o som mais alto do trecho). Entre o quadro certo e os vizinhos fica o mais nítido, porque no pico o jogo costuma estar borrado. Os quadros vêm do render, **sem legenda nem título** (2 por segundo, em `capa/quadros/`).
+- **Texto**: o título do clipe, com a palavra-chave do Claude em destaque (sem ela, a última palavra). Fica acima ou abaixo do rosto e dentro da zona segura do TikTok (o perfil corta em ~3:4 e o título automático do app cobre a parte de baixo).
+- **10 estilos**: Impacto, Adesivo (contorno duplo), Neon, Grito, Faixa vermelha, Fita preta, Quadrinho, Marca-texto, Caixa branca e Minimalista (fontes Anton, Bangers e Montserrat Black). As fontes (licença OFL) ficam em `static/fonts`; o desenho é feito pelo ffmpeg + libass, como as legendas.
+- **Editor** (🖼 Editar capa no clipe): texto (`*palavra*` destaca, Enter quebra linha, as opções de título do Claude viram atalhos), estilo, tamanho, inclinação, sombra, cores, assinatura (ex.: `@seu_perfil`), escolha do quadro (⭐ = ápice), zoom e posição da imagem. Arraste na prévia para mover o texto.
+- Se você não mexeu no texto ou no quadro, eles acompanham o clipe: trocar o título (no editor ou em **🏷 Gerar títulos**) ou o trecho refaz a capa sozinho.
+- **No TikTok**: "Editar capa" → "Enviar" e escolha o `capa.jpg`. Ou ligue **Gravar a capa no fim do vídeo** (0,4 s no último quadro, para escolher arrastando o seletor até o fim); o clipe sem a capa fica em `sem_capa.mp4` e é o que o compilado e a pós-edição usam.
+- O `.zip` leva a capa de cada clipe. Projetos antigos: botão **🖼 Gerar capas** (live vertical: quadros do vídeo original; horizontal: do clipe pronto, com a legenda dele, até salvar o clipe de novo).
+- Padrões em **Mais opções** do formulário (ligar/desligar, estilo, assinatura, capa no vídeo) ou marcando "usar como padrão" no editor.
+
 ## Melhores momentos da partida
 
 No formulário, **Tipo de projeto → Melhores momentos da partida (1 vídeo)**. Em vez de vários cortes soltos, sai um vídeo só com os melhores lances da partida, em **duas versões**: short vertical de 60–90 s e horizontal (YouTube), cada uma com um **roteiro de narração** (.txt e .srt com o tempo de cada fala) para você gravar por cima no CapCut.

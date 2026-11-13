@@ -8,10 +8,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import autocaptions, captions, fx, jobs, paths, picker, posedit, studio, studio_render, styles
+from . import autocaptions, capa, captions, fx, jobs, paths, picker, posedit, studio, studio_render, styles
 
 app = FastAPI(title="Cortaí")
 jobs.load_existing()
@@ -44,6 +44,7 @@ def config():
         "model": picker.MODEL,
         "defaults": jobs.defaults(),
         "caption_presets": {k: v["label"] for k, v in captions.PRESETS.items()},
+        "cover_styles": {k: v["label"] for k, v in capa.STYLES.items()},
     }
 
 
@@ -300,6 +301,53 @@ async def rerender(job_id: str, n: int, request: Request):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}
+
+
+@app.get("/api/jobs/{job_id}/clips/{n}/capa")
+def cover_info(job_id: str, n: int):
+    _job_or_404(job_id)
+    try:
+        return jobs.cover_info(job_id, n)
+    except KeyError:
+        raise HTTPException(404, "clipe não encontrado")
+
+
+@app.post("/api/jobs/{job_id}/clips/{n}/capa")
+async def cover_save(job_id: str, n: int, request: Request):
+    """Gera (corpo vazio) ou salva a capa editada."""
+    _job_or_404(job_id)
+    body = await request.json()
+    try:
+        await run_in_threadpool(jobs.save_cover, job_id, n, body)
+        return jobs.cover_info(job_id, n)
+    except KeyError:
+        raise HTTPException(404, "clipe não encontrado")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/jobs/{job_id}/clips/{n}/capa/previa")
+async def cover_preview(job_id: str, n: int, request: Request):
+    _job_or_404(job_id)
+    body = await request.json()
+    try:
+        path = await run_in_threadpool(jobs.preview_cover, job_id, n, body)
+    except KeyError:
+        raise HTTPException(404, "clipe não encontrado")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+    data = path.read_bytes()
+    path.unlink(missing_ok=True)
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/jobs/{job_id}/capas")
+def covers_missing(job_id: str):
+    _job_or_404(job_id)
+    try:
+        return {"count": jobs.make_missing_covers(job_id)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.get("/api/jobs/{job_id}/source")

@@ -14,10 +14,11 @@ Efeitos:
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
-from . import captions, reframe
+from . import capa, captions, reframe
 from .edit import TimeMap
 
 OUT_W, OUT_H = 1080, 1920
@@ -54,6 +55,11 @@ def _run_encode(args_before_enc: list[str], args_after_enc: list[str], cwd: Path
             return
         error = proc.stderr[-1500:]
     raise RuntimeError(f"ffmpeg falhou ao renderizar: {error}")
+
+
+def encode(args_before_enc: list[str], args_after_enc: list[str], cwd: Path) -> None:
+    """Encoda com o mesmo codificador do render (NVENC quando houver, senão x264)."""
+    _run_encode(args_before_enc, args_after_enc, cwd)
 
 
 def _audio_parts(tm: TimeMap, voice: bool = False) -> tuple[str, str]:
@@ -211,14 +217,21 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         chain += (f";[lay]split=2[m][z];[z]crop={zw}:{zh}:{zx}:{zy},scale={OUT_W}:{OUT_H}:flags=lanczos[zz];"
                   f"[m][zz]overlay=enable='{enable}'[lz]")
         last = "lz"
-    chain += f";[{last}]null{subs}[v]"
+    # saída extra: quadros limpos (sem legenda nem título) para escolher a capa, 2 por segundo
+    frames_dir = out_dir / "capa" / "quadros"
+    shutil.rmtree(frames_dir, ignore_errors=True)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    chain += (f";[{last}]split=2[pv][cv];[pv]null{subs}[v];"
+              f"[cv]fps={1 / capa.FRAME_STEP:g},scale={capa.FRAME_W}:{capa.FRAME_H}:flags=bicubic[cq]")
 
     base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}",
             "-filter_complex", pre + chain, "-map", "[v]"]
     audio = []
     if has_audio:
         audio = ["-map", ain if ain == "0:a:0" else f"[{ain}]", "-c:a", "aac", "-b:a", "192k"]
-    tail = ["-r", f"{min(meta.get('fps') or 30, 60):.3f}", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "clip.mp4"]
+    tail = ["-r", f"{min(meta.get('fps') or 30, 60):.3f}", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "clip.mp4",
+            "-map", "[cq]", "-q:v", "3", "-start_number", "0", "capa/quadros/%04d.jpg"]
+    (out_dir / "sem_capa.mp4").unlink(missing_ok=True)  # capa no fim do vídeo é refeita depois do render
     _run_encode(base, audio + tail, out_dir)
 
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{min(1.0, out_dur / 2):.2f}", "-i", "clip.mp4",
@@ -230,6 +243,7 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         "audio_normalized": bool(level),
         "voice_enhanced": has_audio and voice,
         "srt": "clip.srt",
+        "time_map": [[round(a, 3), round(b, 3)] for a, b in tm.keep],
     }
 
 

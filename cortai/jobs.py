@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import captions, edit, frames, media, paths, picker, render, signals, styles, titles, to_studio, transcribe
+from . import capa, captions, edit, frames, media, paths, picker, render, signals, styles, titles, to_studio, transcribe
 
 JOBS_DIR = paths.JOBS_DIR
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,6 +49,10 @@ DEFAULT_OPTS = {
     "voice_enhance": True,
     "mode": "clips",                   # "clips" (vários cortes) ou "highlights" (melhores momentos num vídeo)
     "highlight_basis": "fala_imagem",  # "fala_imagem" ou "imagem"
+    "cover_auto": True,                # capa (thumbnail) pronta para cada clipe
+    "cover_style": capa.DEFAULT_STYLE,
+    "cover_handle": "",                # ex.: @_saitox_, escrito embaixo do título da capa
+    "cover_in_video": False,           # também gravar a capa no fim do vídeo
 }
 
 # o que o editor / "aplicar a todos" pode mudar em um clipe (sobrepõe as opções do job)
@@ -57,6 +61,7 @@ STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color",
               "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio",
               "voice_enhance")
 CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds")
+COVER_KEYS = ("cover_auto", "cover_style", "cover_handle", "cover_in_video")  # padrões da capa
 SETTINGS_FILE = JOBS_DIR / "_settings.json"
 
 
@@ -71,7 +76,7 @@ def defaults() -> dict:
 
 def save_defaults(values: dict) -> dict:
     current = defaults()
-    current.update({k: v for k, v in values.items() if k in STYLE_KEYS and k != "crop_x"})
+    current.update({k: v for k, v in values.items() if (k in STYLE_KEYS or k in COVER_KEYS) and k != "crop_x"})
     changed = {k: v for k, v in current.items() if DEFAULT_OPTS.get(k) != v}
     SETTINGS_FILE.write_text(json.dumps(changed, ensure_ascii=False, indent=2), encoding="utf-8")
     return current
@@ -488,7 +493,7 @@ def _compile_highlights(job_id: str) -> None:
 
     short = [c for c in done if c.get("no_short")] or done
     update(job_id, status="rendering", message="Montando o short vertical…", progress=0.6)
-    vsegs = [JOBS_DIR / c["file"] for c in short]
+    vsegs = [plain_clip(c["file"]) for c in short]
     vstarts = highlights.compile_video(vsegs, [f"#{k} · {c['title']}" for k, c in enumerate(short, 1)],
                                        hl.get("titulo", ""), out_dir / "short-vertical.mp4", 1080, 1920, fps)
 
@@ -603,6 +608,13 @@ def _retitle(job_id: str, backend: str) -> None:
             to_render.append(idx)
         _set_clip(job_id, idx, **fields)
         changed.append({**clip, **fields})
+        cover = clip.get("cover")
+        if cover and not cover.get("custom_text") and idx not in to_render:
+            try:
+                _make_cover(job_id, idx, words=words, attach=True)
+            except Exception as exc:
+                traceback.print_exc()
+                _set_clip(job_id, idx, cover_error=str(exc))
     titles.record(JOBS_DIR, job_id, changed)
 
     for i, idx in enumerate(to_render):
@@ -692,12 +704,206 @@ def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
         keep, zooms = _edit_plan(job_id, clip, opts, captions.with_adds(words, opts.get("word_adds")))
         info = render.render_clip(Path(job["source"]["path"]), job["source"], clip, out_dir, words, opts,
                                   keep=keep, zooms=zooms)
-        _set_clip(job_id, idx, status="done", rev=clip.get("rev", 0) + 1,
-                  file=f"{job_id}/clips/{clip['n']:02d}/clip.mp4",
-                  thumb=f"{job_id}/clips/{clip['n']:02d}/thumb.jpg", **info)
+        _set_clip(job_id, idx, file=f"{job_id}/clips/{clip['n']:02d}/clip.mp4",
+                  thumb=f"{job_id}/clips/{clip['n']:02d}/thumb.jpg", cover_origin="render", **info)
+        if opts.get("cover_auto", True) or clip.get("cover"):
+            try:
+                _make_cover(job_id, idx, words=words, attach=True)
+            except Exception as exc:  # sem capa o clipe continua valendo
+                traceback.print_exc()
+                _set_clip(job_id, idx, cover_error=str(exc))
+        _set_clip(job_id, idx, status="done", rev=clip.get("rev", 0) + 1)
     except Exception as exc:
         traceback.print_exc()
         _set_clip(job_id, idx, status="error", error=str(exc))
+
+
+# ------------------------------------------------------------------ capa (thumbnail)
+
+def _clip_dir(job_id: str, clip: dict) -> Path:
+    return _dir(job_id) / "clips" / f"{clip['n']:02d}"
+
+
+def _cover_frames(job_id: str, idx: int) -> tuple[list[Path], str]:
+    """Quadros do clipe para a capa. Clipe renderizado antes da capa existir: tira agora."""
+    job = get(job_id)
+    clip = job["clips"][idx]
+    d = _clip_dir(job_id, clip)
+    found = capa.list_frames(d)
+    if found:
+        return found, clip.get("cover_origin") or "render"
+    src = job["source"]
+    vertical = src["width"] / src["height"] < 0.6
+    if not vertical and not (d / "clip.mp4").exists():
+        raise ValueError("renderize o clipe antes de fazer a capa")
+    origin = capa.extract_frames(Path(src["path"]), clip["start"], clip["end"] - clip["start"], d, vertical)
+    _set_clip(job_id, idx, cover_origin=origin)
+    found = capa.list_frames(d)
+    if not found:
+        raise RuntimeError("não deu para tirar os quadros do clipe")
+    return found, origin
+
+
+def _apex_index(job_id: str, clip: dict, found: list[Path], origin: str, words: list[dict] | None) -> int:
+    loud_file = _dir(job_id) / "loudness.json"
+    events = []
+    if loud_file.exists() and not clip.get("peak") and not clip.get("reactions"):
+        words = words if words is not None else _words(job_id)
+        events = [e for e in signals.audio_events(json.loads(loud_file.read_text(encoding="utf-8")), words)
+                  if e["kind"] in ("grito", "som_alto")]
+    rel = capa.apex_time(clip, events) - clip["start"]
+    if origin != "original" and clip.get("time_map"):  # quadros no tempo do vídeo final (com jump cuts)
+        rel = edit.TimeMap([tuple(k) for k in clip["time_map"]]).to_out(rel)
+    return capa.best_frame(found, rel)
+
+
+def _cover_in_video(job: dict, clip: dict) -> bool:
+    cover = clip.get("cover") or {}
+    return bool(cover["in_video"]) if "in_video" in cover else bool(job["options"].get("cover_in_video"))
+
+
+def _make_cover(job_id: str, idx: int, changes: dict | None = None, words: list[dict] | None = None,
+                attach: bool = False) -> dict:
+    """Gera ou atualiza a capa do clipe. Sem `changes`: automática (quadro do ápice + título),
+    preservando o que o usuário já mudou à mão. `attach`: refaz a capa no fim do vídeo se ligada."""
+    job = get(job_id)
+    clip = job["clips"][idx]
+    d = _clip_dir(job_id, clip)
+    found, origin = _cover_frames(job_id, idx)
+    clip = get(job_id)["clips"][idx]
+    apex = _apex_index(job_id, clip, found, origin, words)
+    old = clip.get("cover") or {}
+    auto_text = capa.auto_highlight(clip["title"], clip.get("keywords"))
+    if old:
+        params = {k: old[k] for k in capa.PARAM_KEYS if k in old}
+        if not old.get("custom_text"):
+            params["text"] = auto_text
+        if not old.get("custom_frame"):
+            params["frame"] = apex
+    else:
+        params = capa.default_params(clip, apex, found[apex], job["options"])
+    meta = {"custom_text": bool(old.get("custom_text")), "custom_frame": bool(old.get("custom_frame")),
+            "in_video": bool(old.get("in_video", job["options"].get("cover_in_video")))}
+    if changes:
+        params = capa.clean_params(changes, params)
+        meta["custom_text"] = params["text"].strip() != auto_text.strip()
+        meta["custom_frame"] = params["frame"] != apex
+        if "in_video" in changes:
+            meta["in_video"] = bool(changes["in_video"])
+    params["frame"] = min(params["frame"], len(found) - 1)
+    out = capa.render(found[params["frame"]], params, d / "capa" / "capa.jpg")
+    cover = {**params, **meta, "apex": apex, "frames": len(found), "auto_text": auto_text}
+    _set_clip(job_id, idx, cover=cover, cover_error=None, cover_rev=clip.get("cover_rev", 0) + 1,
+              cover_file=f"{job_id}/clips/{clip['n']:02d}/capa/{out.name}")
+    if attach:
+        _sync_cover_video(job_id, idx)
+    return get(job_id)["clips"][idx]
+
+
+def _sync_cover_video(job_id: str, idx: int) -> None:
+    """Grava (ou tira) a capa do fim do vídeo conforme a opção."""
+    job = get(job_id)
+    clip = job["clips"][idx]
+    d = _clip_dir(job_id, clip)
+    if _cover_in_video(job, clip) and (d / "capa" / "capa.jpg").exists():
+        capa.attach_to_video(d, render.encode, bool(job["source"].get("has_audio")), job["source"].get("fps") or 30)
+    else:
+        capa.detach_from_video(d)
+
+
+def plain_clip(file: str) -> Path:
+    """O clipe sem a capa gravada no fim (para compilar ou pós-editar)."""
+    path = JOBS_DIR / file
+    plain = path.with_name("sem_capa.mp4")
+    return plain if plain.exists() else path
+
+
+def cover_info(job_id: str, n: int) -> dict:
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    clip = job["clips"][_clip_index(job, n)]
+    d = _clip_dir(job_id, clip)
+    found = capa.list_frames(d)
+    return {
+        "cover": clip.get("cover"), "file": clip.get("cover_file"), "rev": clip.get("cover_rev", 0),
+        "frames": [f"{job_id}/clips/{clip['n']:02d}/capa/quadros/{f.name}" for f in found],
+        "step": capa.FRAME_STEP, "origin": clip.get("cover_origin") or ("render" if found else None),
+        "in_video": _cover_in_video(job, clip), "title": clip["title"],
+        "title_options": [o["title"] for o in clip.get("title_options") or [] if not o.get("problems")],
+        "styles": {k: v["label"] for k, v in capa.STYLES.items()},
+        "style_colors": {k: {"text": v["text"], "hl": v["hl"]} for k, v in capa.STYLES.items()},
+        "handle": job["options"].get("cover_handle") or "",
+    }
+
+
+def save_cover(job_id: str, n: int, changes: dict) -> dict:
+    """Editor da capa: salva, desenha e, se a capa vai no vídeo, regrava o fim do clipe (em segundo plano)."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    idx = _clip_index(job, n)
+    clip = job["clips"][idx]
+    if clip["status"] in ("pending", "rendering"):
+        raise ValueError("espere a renderização do clipe terminar")
+    before = _cover_in_video(job, clip)
+    clip = _make_cover(job_id, idx, changes or None)
+    after = _cover_in_video(get(job_id), clip)
+    if before or after:
+        _set_clip(job_id, idx, status="pending")
+
+        def run() -> None:
+            _set_clip(job_id, idx, status="rendering")
+            try:
+                _sync_cover_video(job_id, idx)
+                _set_clip(job_id, idx, status="done", rev=get(job_id)["clips"][idx].get("rev", 0) + 1)
+            except Exception as exc:
+                traceback.print_exc()
+                _set_clip(job_id, idx, status="done", cover_error=f"capa no vídeo: {exc}")
+        _worker.submit(run)
+    return get(job_id)["clips"][idx]
+
+
+def preview_cover(job_id: str, n: int, changes: dict) -> Path:
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    idx = _clip_index(job, n)
+    clip = job["clips"][idx]
+    d = _clip_dir(job_id, clip)
+    found = capa.list_frames(d)
+    if not found or not clip.get("cover"):
+        raise ValueError("a capa deste clipe ainda não foi gerada")
+    params = capa.clean_params(changes, clip["cover"])
+    frame = found[min(params["frame"], len(found) - 1)]
+    out = d / "capa" / f"previa_{threading.get_ident()}.jpg"
+    return capa.render(frame, params, out, preview=True)
+
+
+def make_missing_covers(job_id: str) -> int:
+    """Capas dos clipes prontos que ainda não têm (projetos de antes da capa existir)."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    if job["status"] not in ("done", "error"):
+        raise ValueError("espere o processamento atual terminar")
+    todo = [i for i, c in enumerate(job["clips"]) if c["status"] == "done" and not c.get("cover")]
+    if not todo:
+        raise ValueError("todos os clipes prontos já têm capa")
+    update(job_id, status="rendering", progress=0.0, message="Fazendo as capas…")
+
+    def run() -> None:
+        words = _words(job_id)
+        for k, idx in enumerate(todo):
+            update(job_id, progress=k / len(todo), message=f"Fazendo capa {k + 1} de {len(todo)}…")
+            try:
+                _make_cover(job_id, idx, words=words, attach=True)
+            except Exception as exc:
+                traceback.print_exc()
+                _set_clip(job_id, idx, cover_error=str(exc))
+        update(job_id, status="done", progress=1.0, message=f"{len(todo)} capas prontas")
+    _worker.submit(run)
+    return len(todo)
 
 
 def studio_tracks(job_id: str, n: int, seg_start: float, asset_id: str) -> dict:
@@ -842,6 +1048,8 @@ def export_zip(job_id: str) -> Path:
             z.write(clip_dir / "clip.mp4", f"{base}.mp4")
             if (clip_dir / "clip.srt").exists():
                 z.write(clip_dir / "clip.srt", f"{base}.srt")
+            if (clip_dir / "capa" / "capa.jpg").exists():
+                z.write(clip_dir / "capa" / "capa.jpg", f"{base}-capa.jpg")
             post = c.get("post") or f"{c['title']}\n\n{' '.join(c.get('hashtags', []))}"
             lines.append(f"### {base}  (score {c['score']})\nTítulo: {c['title']}\n{post}\n")
         z.writestr("posts.txt", "\n".join(lines))
