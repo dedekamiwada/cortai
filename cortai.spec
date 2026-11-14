@@ -7,6 +7,19 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 site = Path(sysconfig.get_paths()["purelib"])
 
+# Não empacota código no meio de um merge/rebase: um build feito com marcas de conflito no app.js
+# já gerou um Cortai.exe com a tela "Cortes com IA" travada (o JS nem carrega).
+_conflicts = [
+    f"{p.as_posix()}:{i}"
+    for p in [*Path("cortai").glob("*.py"), *Path("static").glob("*.*"), Path("run.py")]
+    if p.suffix in (".py", ".js", ".html", ".css")
+    for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1)
+    if line.startswith(("<<<<<<< ", ">>>>>>> ")) or line == "======="
+]
+if _conflicts:
+    raise SystemExit("Build cancelado: há marcas de conflito do git (termine o merge/rebase antes):\n  "
+                     + "\n  ".join(_conflicts[:20]))
+
 datas = [("static", "static")]
 for tool in ("ffmpeg", "ffprobe"):
     found = shutil.which(tool)
