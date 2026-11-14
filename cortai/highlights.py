@@ -1,14 +1,18 @@
-"""Melhores momentos de uma partida inteira, num vídeo só (short vertical + versão horizontal),
-com roteiro de narração para gravar por cima.
+"""Resumo narrado de uma partida inteira, num vídeo só (short vertical + versão horizontal), com roteiro
+de narração para gravar por cima no CapCut.
+
+O estilo (referência: vídeos de Rocket League do @howardrl) não é "o melhor lance": é CONTEXTUALIZAR a
+partida. Ela aparece inteira e em ordem — kickoff, todos os gols dos dois times, viradas, prorrogação, tela de
+resultado —, com o tempo morto cortado, o placar do jogo sempre visível e uma narração de personagem do
+começo ao fim (abertura que apresenta a série e o adversário, cada lance com nome próprio, zoeira com o
+próprio erro, fecho com chamada para o próximo episódio).
 
 Duas bases para achar os lances:
   fala_imagem — transcrição + picos de áudio → candidatos; depois o Claude assiste aos candidatos.
   imagem      — sem transcrição: o Claude varre a partida em folhas de frames (+ picos do som do jogo),
                 propõe candidatos e depois assiste a cada um de perto.
 
-Na revisão o Claude escolhe os lances (em ordem cronológica, contando a história da partida), dá um
-rótulo curto a cada um, marca quais entram no short e escreve as falas da narração com o segundo
-relativo ao início do lance. O código monta as linhas do tempo e o roteiro (.txt e .srt) de cada versão.
+O código monta as linhas do tempo e o roteiro (.txt e .srt) de cada versão.
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ from pathlib import Path
 
 from . import frames, picker, render, signals
 
-SHORT_MAX = 90.0          # o short vertical fica em 60–90 s
+SHORT_MAX = 110.0         # o short vertical fica em ~60–110 s (a referência tem 97 s para 5 min + prorrogação)
 LABEL_SECONDS = 2.2       # rótulo "#1 · LABEL" no começo de cada lance
 SCAN_MAX_FRAMES = 420     # varredura do modo "só imagem": no máximo isso de quadros na partida toda
 SCAN_PER_SHEET = 24
@@ -45,19 +49,22 @@ def scan_sheets(src: Path, meta: dict, out_dir: Path, start: float, end: float,
     return sheets
 
 
-SCAN_SYSTEM = """Você é editor de vídeos de melhores momentos de partidas de jogos (TikTok/Shorts e YouTube). \
-Você vai ver a partida INTEIRA em folhas de quadros (cada quadro tem o segundo do vídeo escrito no canto) e uma \
-lista de picos do som (explosões, gols, mortes, gritos). Não há transcrição: decida pelo que se VÊ.
+SCAN_SYSTEM = """Você é editor de vídeos de RESUMO NARRADO de partidas (TikTok/Shorts e YouTube): a partida \
+inteira contada em ~1,5 min, em ordem, com o tempo morto cortado. Você vai ver a partida INTEIRA em folhas de \
+quadros (cada quadro tem o segundo do vídeo escrito no canto) e uma lista de picos do som. Não há transcrição: \
+decida pelo que se VÊ — use o placar e o relógio do HUD.
 
-Proponha candidatos a lance para um vídeo de melhores momentos:
-- jogadas boas (abate múltiplo, gol, clutch, defesa, virada);
-- momentos engraçados (falha, morte boba, bug, situação absurda, reação forte na câmera);
-- momentos relevantes para a história da partida (começo, virada no placar, momento decisivo, resultado final).
-Cada candidato: `start` alguns segundos antes do acontecimento (só o contexto necessário), `end` logo depois \
-que ele resolve, `peak` = segundo do acontecimento. Entre 5 e 30 s cada. Não proponha menu, loja, \
-carregamento ou tela parada. Candidatos não podem se sobrepor. `reason` em português diz o que acontece e \
-por que entra. `score` 0–100 = força do lance. `title` = rótulo curto do lance."""
-
+Proponha candidatos que, juntos, contem a partida do começo ao fim:
+- o KICKOFF inicial (placar zerado, relógio cheio);
+- TODOS os gols, dos dois times (o placar muda; banner "MARCOU"/"SCORED"; explosão), cada um com a jogada \
+que levou a ele;
+- jogadas quase-gol, defesas, falhas engraçadas e reações fortes que mudem o clima da partida;
+- prorrogação (se houver) e a TELA DE RESULTADO (vitória/derrota/desistência).
+Cada candidato: `start` 2–4 s antes do lance (sem tempo morto), `end` logo depois que ele resolve (gol + 1–2 s \
+de comemoração; pule replay longo), `peak` = segundo do lance. Entre 3 e 15 s cada. Não proponha menu, \
+carregamento, replay inteiro ou tela parada. Sem sobreposição. `reason` em português: o que acontece e o placar \
+depois do lance. `score` 0–100 = importância para a história (gols e resultado são altos). `title` = nome curto \
+do lance."""
 
 def scan_prompt(sheets: list[tuple[Path, float, float]], events: list[dict], count: int, extra: str) -> str:
     parts = [f"Proponha até {count} candidatos."]
@@ -72,15 +79,15 @@ def scan_prompt(sheets: list[tuple[Path, float, float]], events: list[dict], cou
 
 
 def transcript_candidates_prompt(transcript_text: str, duration: float, count: int, extra: str) -> str:
-    parts = [f"Duração total: {duration:.0f}s. Proponha até {count} candidatos a lance para um vídeo de "
-             f"MELHORES MOMENTOS da partida (jogadas boas, momentos engraçados e momentos relevantes para a história "
-             f"da partida, incluindo o resultado). Cada um entre 5 e 30 s, sem sobreposição."]
+    parts = [f"Duração total: {duration:.0f}s. Proponha até {count} candidatos para um RESUMO NARRADO da partida "
+             f"inteira: o kickoff inicial, TODOS os gols dos dois times (com a jogada que levou a cada um), lances que "
+             f"mudam o clima (quase-gol, defesa, falha engraçada, reação forte), prorrogação e o resultado final. "
+             f"Cada um entre 3 e 15 s, sem tempo morto e sem sobreposição. Gols e resultado têm `score` alto."]
     if extra:
         parts.append(f"Instruções extras do usuário: {extra}")
     parts += ["", "<transcricao>", transcript_text, "</transcricao>", "",
               'Responda somente com JSON {"clips": [{"title", "start", "end", "peak", "hook", "reason", "score", "hashtags"}]}.']
     return "\n".join(parts)
-
 
 # ------------------------------------------------------------------ mapa de partidas da live
 
@@ -145,27 +152,44 @@ def normalize_matches(raw: dict, duration: float) -> list[dict]:
 
 # ------------------------------------------------------------------ revisão final (escolha + roteiro)
 
-REVIEW_SYSTEM = """Você é o editor-chefe montando UM vídeo de melhores momentos de uma partida, que sai em duas \
-versões: um SHORT vertical de 60 a 90 s e um vídeo HORIZONTAL de 3 a 8 min para o YouTube. Para cada \
+REVIEW_SYSTEM = """Você é o editor-chefe montando um RESUMO NARRADO de UMA partida inteira, no estilo dos vídeos \
+de Rocket League que contam a partida do kickoff ao resultado em ~1,5 min, com uma narração de personagem por \
+cima. Sai em duas versões: um SHORT vertical (até ~110 s) e um vídeo HORIZONTAL para o YouTube. Para cada \
 candidato há uma imagem em grade com quadros do trecho (o segundo do vídeo original está em cada quadro).
 
-Monte a história da partida: começo → lances → momento decisivo → resultado. Para cada candidato:
-1. `visual`: o que realmente acontece na tela, em 1–2 frases.
-2. `keep=false` se não sustenta: menu, carregamento, tela parada, lance fraco ou repetido.
-3. Ajuste `start`/`end` pelo que se vê: só o contexto necessário antes, termine logo que o lance resolve \
-(ou quando a reação acaba). Dentro do short, prefira lances de 5 a 15 s.
-4. `label`: rótulo de 1–4 palavras em caixa alta para a tela ("CLUTCH 1V3", "MORRI PRA PORTA", "VIRADA").
-5. `tipo`: jogada | engracado | relevante | resultado.
-6. `no_short`: true para os lances que entram no short vertical. A soma das durações do short deve ficar \
-entre 60 e 90 s; o horizontal usa todos com keep=true.
+O objetivo NÃO é escolher "os melhores lances": é CONTEXTUALIZAR a partida. Quem assiste precisa entender o \
+jogo inteiro: como começou, cada gol (dos dois times), as viradas, a prorrogação e como terminou.
+
+Para cada candidato:
+1. `visual`: o que acontece na tela e o PLACAR/relógio depois do lance (leia o HUD), em 1–2 frases.
+2. `keep=false` só se for repetido, menu/carregamento/replay longo ou não acrescentar nada à história. \
+Mantenha o kickoff inicial, TODOS os gols e a tela de resultado.
+3. Ajuste `start`/`end` sem tempo morto: 2–4 s antes do lance até 1–2 s depois do gol (corte o replay \
+longo). Lances de 3 a 12 s.
+4. `label`: nome curto do lance, no estilo de bordão ("KICKOFF DO DEDE", "GOL DELES", "VIRADA", \
+"GOL DE OURO").
+5. `tipo`: abertura | gol_nosso | gol_deles | jogada | engracado | prorrogacao | resultado.
+6. `no_short`: true para tudo que entra no short — o short também conta a partida INTEIRA; deixe false só \
+para lances extras que cabem no horizontal mas não no short. O short deve ficar entre 60 e 110 s.
 7. `reactions`: até 2 segundos (vídeo original) em que a cara do streamer reage forte (zoom no short).
-8. `narracao`: falas para o streamer gravar por cima, com `t` = segundos desde o INÍCIO do lance (já \
-ajustado) e `texto`. Tom de narrador de shorts brasileiro: frases curtas, zoeira, conta o que vai acontecer \
-sem estragar a surpresa e comenta depois. No máximo ~2,5 palavras por segundo do espaço até a próxima fala. \
-Deixe o som do jogo/a reação respirar no pico (não narre por cima do momento principal nem de uma fala \
-engraçada do streamer).
-Além disso: `titulo` do vídeo (curto, específico), `gancho` = primeira fala da narração do short (prende nos \
-3 primeiros segundos sem entregar o final) e `post` = descrição com 3 a 5 hashtags."""
+8. `narracao`: a narração que o streamer vai gravar por cima, com `t` = segundos desde o INÍCIO do lance e \
+`texto`. Ela é contínua — o vídeo inteiro é narrado — e tem cara de personagem:
+   - ABERTURA (1º lance): bordão de série + quem é o adversário + o que está em jogo. Ex.: "Dia [X] tentando \
+pegar champion até eu perder. Hoje o adversário é [nome do HUD]…". Use [X] quando não souber o número.
+   - cada lance com nome próprio, falado como bordão ("Kickoff do Dede.", "Dede Power Shot.", "Gol \
+certificado do Dede.");
+   - comente CADA gol com o placar ("2 a 1 pra eles.") e com zoeira, principalmente com o próprio erro \
+("vocês podem dizer que eu tomei drible, mas na verdade eu deixei");
+   - pequenas quebras de personagem e piadas rápidas dão ritmo; tensão na prorrogação;
+   - FECHO no resultado: placar final + agradecimento/zoeira + chamada para o próximo ("Quem é o próximo?").
+   Frases curtas, PT-BR falado, no máximo ~2,5 palavras por segundo até a próxima fala. Não narre por cima \
+de uma fala engraçada do streamer.
+Além disso: `titulo` (título do post, curto e específico), `gancho` = a primeira frase da narração \
+(o bordão da série) e `post` = descrição com 3 a 5 hashtags."""
+
+KINDS = {"abertura": "Abertura", "gol_nosso": "Gol nosso", "gol_deles": "Gol deles", "jogada": "Jogada",
+         "engracado": "Engraçado", "prorrogacao": "Prorrogação", "resultado": "Resultado"}
+STORY = {"abertura", "gol_nosso", "gol_deles", "prorrogacao", "resultado"}  # não saem do short
 
 REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -185,7 +209,7 @@ REVIEW_SCHEMA = {
                 "end": {"type": "number"},
                 "peak": {"type": "number"},
                 "label": {"type": "string"},
-                "tipo": {"type": "string", "enum": ["jogada", "engracado", "relevante", "resultado"]},
+                "tipo": {"type": "string", "enum": list(KINDS)},
                 "visual": {"type": "string"},
                 "no_short": {"type": "boolean"},
                 "reactions": {"type": "array", "items": {"type": "number"}},
@@ -239,16 +263,19 @@ def normalize(raw: dict, candidates, duration: float) -> dict:
             "candidate": idx, "start": round(start, 2), "end": round(end, 2),
             "peak": float(item.get("peak") or start),
             "label": " ".join((item.get("label") or "").upper().split())[:28],
-            "tipo": item.get("tipo") or "jogada", "visual": (item.get("visual") or "").strip(),
+            "tipo": item.get("tipo") if item.get("tipo") in KINDS else "jogada", "visual": (item.get("visual") or "").strip(),
             "no_short": bool(item.get("no_short")), "score": max(0, min(100, int(item.get("score") or 50))),
             "reactions": [float(r) for r in item.get("reactions") or [] if start <= float(r) <= end][:2],
             "narracao": fala,
         })
     lances.sort(key=lambda x: x["start"])
-    # o short respeita o teto: tira os mais fracos marcados até caber
-    short = [x for x in lances if x["no_short"]] or lances[:]
-    while sum(x["end"] - x["start"] for x in short) > SHORT_MAX and len(short) > 1:
-        short.remove(min(short, key=lambda x: x["score"]))
+    # o short conta a partida inteira: passou do teto, saem primeiro os lances que não são gol/abertura/resultado
+    short = [x for x in lances if x["no_short"] or x["tipo"] in STORY] or lances[:]
+    while sum(x["end"] - x["start"] for x in short) > SHORT_MAX:
+        extras = [x for x in short if x["tipo"] not in STORY]
+        if not extras:
+            break
+        short.remove(min(extras, key=lambda x: x["score"]))
     for x in lances:
         x["no_short"] = x in short
     return {"titulo": (raw.get("titulo") or "").strip(), "gancho": (raw.get("gancho") or "").strip(),
@@ -320,6 +347,12 @@ def _duration(path: Path) -> float:
     return float(proc.stdout.strip() or 0)
 
 
+def _has_audio(path: Path) -> bool:
+    proc = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+                           "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    return bool(proc.stdout.strip())
+
+
 def compile_video(segments: list[Path], labels: list[str], title: str, out: Path, width: int, height: int,
                   fps: float) -> list[float]:
     """Junta os trechos com corte seco + flash branco curto, rótulo de cada lance e título no começo.
@@ -329,17 +362,22 @@ def compile_video(segments: list[Path], labels: list[str], title: str, out: Path
     for s in segments:
         starts.append(acc)
         acc += _duration(s)
-    (work / f"{out.stem}.ass").write_text(
-        _labels_ass(width, height, list(zip(starts, labels)), title), encoding="utf-8")
+    texts = [(t, x) for t, x in zip(starts, labels) if x]
+    subs = ""
+    if texts or title:
+        (work / f"{out.stem}.ass").write_text(_labels_ass(width, height, texts, title), encoding="utf-8")
+        subs = f",subtitles={out.stem}.ass"
     inputs, chain = [], []
     for i, s in enumerate(segments):
         inputs += ["-i", str(s)]
-        chain.append(f"[{i}:v]scale={width}:{height},fps={fps:.3f},format=yuv420p,setsar=1[v{i}];"
-                     f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}]")
+        # vídeo sem som (o modo "só imagem" aceita): silêncio do tamanho do trecho, senão o concat quebra
+        audio = (f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}]" if _has_audio(s) else
+                 f"anullsrc=r=48000:cl=stereo,atrim=0:{_duration(s):.3f}[a{i}]")
+        chain.append(f"[{i}:v]scale={width}:{height},fps={fps:.3f},format=yuv420p,setsar=1[v{i}];{audio}")
     cat = "".join(f"[v{i}][a{i}]" for i in range(len(segments)))
     flashes = "".join(f",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.6:t=fill:enable='between(t,{t:.3f},{t + 0.1:.3f})'"
                       for t in starts[1:])
-    graph = ";".join(chain) + f";{cat}concat=n={len(segments)}:v=1:a=1[cv][ca];[cv]subtitles={out.stem}.ass{flashes}[v]"
+    graph = ";".join(chain) + f";{cat}concat=n={len(segments)}:v=1:a=1[cv][ca];[cv]null{subs}{flashes}[v]"
     tmp = work / f"{out.stem}.tmp.mkv"
     base = ["ffmpeg", "-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[ca]"]
     render._run_encode(base, ["-c:a", "pcm_s16le", "-pix_fmt", "yuv420p", tmp.name], work)
@@ -402,7 +440,10 @@ def script(lances: list[dict], starts: list[float], durations: list[float], tota
         nxt = lines[i + 1][0] if i + 1 < len(lines) else total
         need = max(1.2, len(text.split()) / WORDS_PER_SECOND)
         timed.append((t, min(nxt, t + need), text, k, need > nxt - t + 0.05))
-    head = [f"ROTEIRO DE NARRAÇÃO — {version}", f"Vídeo: {titulo}" if titulo else "", f"Duração: {total:.1f} s", ""]
+    head = [f"ROTEIRO DE NARRAÇÃO — {version}", f"Vídeo: {titulo}" if titulo else "", f"Duração: {total:.1f} s", "",
+            "Como gravar: narre o vídeo inteiro, como personagem. Fale os nomes dos lances como bordão, diga o placar",
+            "a cada gol e deixe a sua reação/o som do gol respirar. No CapCut: grave a narração, abaixe o áudio do",
+            "jogo para ~30% e gere a legenda automática (1–3 palavras, destaque em amarelo).", ""]
     body = []
     current = -1
     for t, e, text, k, tight in timed:

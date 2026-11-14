@@ -9,18 +9,37 @@ import cv2
 import numpy as np
 
 
+# Amostragem espaçada (mapa de partidas, varredura) não precisa de todos os quadros: decodificar só os
+# keyframes (OBS grava 1 a cada 2 s) com a GPU foi 23x mais rápido numa live HEVC 1080x1920
+# (10 min: 25,8 s → 1,1 s). Abaixo deste intervalo entre quadros, decodifica tudo para não perder precisão.
+KEYFRAME_ONLY_STEP = 4.0
+_cuda_ok: bool | None = None
+
+
 def sample(src: Path, start: float, end: float, n: int, width: int,
            src_w: int, src_h: int) -> tuple[list[np.ndarray], list[float]]:
     """Decodifica o trecho uma vez (mais rápido que N buscas) e devolve até n quadros BGR."""
+    global _cuda_ok
     dur = max(0.5, end - start)
     rate = n / dur
     height = int(round(src_h * width / src_w / 2)) * 2
-    cmd = [
-        "ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(src),
-        "-vf", f"fps={rate:.5f},scale={width}:{height}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
-    ]
-    data = subprocess.run(cmd, capture_output=True).stdout
+    tail = ["-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(src),
+            "-vf", f"fps={rate:.5f},scale={width}:{height}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
     size = width * height * 3
+    data = b""
+    if 1 / rate >= KEYFRAME_ONLY_STEP:
+        fast = ["-skip_frame", "nokey"]
+        if _cuda_ok is not False:
+            proc = subprocess.run(["ffmpeg", "-v", "error", "-hwaccel", "cuda", *fast, *tail], capture_output=True)
+            data = proc.stdout
+            if proc.returncode != 0:
+                _cuda_ok = False  # sem GPU NVIDIA/driver: não tenta de novo nesta sessão
+            elif data:
+                _cuda_ok = True
+        if len(data) < size:
+            data = subprocess.run(["ffmpeg", "-v", "error", *fast, *tail], capture_output=True).stdout
+    if len(data) < size:
+        data = subprocess.run(["ffmpeg", "-v", "error", *tail], capture_output=True).stdout
     count = min(n, len(data) // size)
     frames = [np.frombuffer(data[i * size : (i + 1) * size], np.uint8).reshape(height, width, 3)
               for i in range(count)]

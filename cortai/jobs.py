@@ -309,7 +309,7 @@ def _run_pipeline(job_id: str) -> None:
 
 # ------------------------------------------------------------------ melhores momentos da partida
 
-HIGHLIGHT_CANDIDATES = 24
+HIGHLIGHT_CANDIDATES = 30  # resumo da partida: precisa cobrir todos os gols
 MATCH_SPLIT_MIN = 15 * 60  # acima disso, "melhores momentos" sem trecho escolhido começa separando as partidas
 
 
@@ -420,7 +420,7 @@ def _run_highlights(job_id: str) -> None:
                          picker.CANDIDATES_SCHEMA)
     (d / "candidates.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     candidates = sorted((c for c in picker.parse_plan(raw) if c.end > c.start), key=lambda c: c.score, reverse=True)
-    candidates = sorted(candidates[:20], key=lambda c: c.start)
+    candidates = sorted(candidates[:HIGHLIGHT_CANDIDATES], key=lambda c: c.start)
     if not candidates:
         raise RuntimeError("o Claude não achou lances — tente outras instruções")
 
@@ -447,17 +447,18 @@ def _run_highlights(job_id: str) -> None:
     plan = highlights.normalize(raw, candidates, src["duration"])
     if not plan["lances"]:
         raise RuntimeError("nenhum lance passou na revisão — tente outras instruções")
-    kinds = {"jogada": "Jogada", "engracado": "Engraçado", "relevante": "Relevante", "resultado": "Resultado"}
     clips = []
     for i, x in enumerate(plan["lances"], 1):
         clips.append({
             "n": i, "status": "pending", "rev": 0, "title": x["label"] or f"Lance {i}",
             "start": x["start"], "end": x["end"], "peak": x["peak"], "reactions": x["reactions"],
             "keywords": [], "score": x["score"], "scores": {}, "visual": x["visual"],
-            "reason": kinds.get(x["tipo"], x["tipo"]) + (" · entra no short" if x["no_short"] else ""),
+            "reason": highlights.KINDS.get(x["tipo"], x["tipo"]) + (" · entra no short" if x["no_short"] else ""),
             "hook": "", "post": "", "hashtags": [], "title_options": [], "candidate": x["candidate"],
             "review_image": f"{job_id}/review/c{x['candidate']:02d}.jpg",
             "no_short": x["no_short"], "tipo": x["tipo"], "narracao": x["narracao"],
+            # o lance é um trecho do resumo: título gravado em cada um quebraria a narração
+            "overrides": {"title_overlay": False},
         })
     update(job_id, clips=clips, status="rendering", progress=0.0,
            highlight={"titulo": plan["titulo"], "gancho": plan["gancho"], "post": plan["post"]})
@@ -496,8 +497,7 @@ def _compile_highlights(job_id: str) -> None:
     short = [c for c in done if c.get("no_short")] or done
     update(job_id, status="rendering", message="Montando o short vertical…", progress=0.6)
     vsegs = [plain_clip(c["file"]) for c in short]
-    vstarts = highlights.compile_video(vsegs, [f"#{k} · {c['title']}" for k, c in enumerate(short, 1)],
-                                       hl.get("titulo", ""), out_dir / "short-vertical.mp4", 1080, 1920, fps)
+    vstarts = highlights.compile_video(vsegs, [], "", out_dir / "short-vertical.mp4", 1080, 1920, fps)
 
     hsegs = []
     for k, c in enumerate(done, 1):
@@ -508,8 +508,7 @@ def _compile_highlights(job_id: str) -> None:
                                       opts.get("voice_enhance", True))
         hsegs.append(out)
     update(job_id, message="Montando a versão horizontal…", progress=0.92)
-    hstarts = highlights.compile_video(hsegs, [f"#{k} · {c['title']}" for k, c in enumerate(done, 1)],
-                                       hl.get("titulo", ""), out_dir / "horizontal.mp4", 1920, 1080, fps)
+    hstarts = highlights.compile_video(hsegs, [], "", out_dir / "horizontal.mp4", 1920, 1080, fps)
 
     versions = {"vertical": (short, vsegs, vstarts, "short-vertical"), "horizontal": (done, hsegs, hstarts, "horizontal")}
     for key, (clips, segs, starts, name) in versions.items():
