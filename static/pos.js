@@ -1,4 +1,6 @@
 const $ = (s, el = document) => el.querySelector(s);
+// nome para exibir: o arquivo baixado vem como "Tentando+pegar+champ (1).mp4"
+const prettyName = (s) => { s = s || ""; try { s = decodeURIComponent(s); } catch {} return s.replace(/\+/g, " ").replace(/\.(mp4|mkv|mov|webm|flv|avi|ts)$/i, "").trim() || s; };
 
 const STAGES = {
   queued: "Na fila", transcribing: "Transcrevendo", watching: "Preparando frames",
@@ -7,8 +9,8 @@ const STAGES = {
 };
 const BUSY = new Set(["queued", "transcribing", "watching", "planning", "rendering"]);
 const TIPOS = {
-  zoom_punch: "🔍 Zoom punch", zoom_lento: "🔎 Zoom lento", tremor: "📳 Tremor", flash_texto: "💥 Flash de texto",
-  selo: "🏷 Selo", emote: "😶 Emote", sfx: "🔊 Efeito sonoro",
+  zoom_punch: "Zoom punch", zoom_lento: "Zoom lento", tremor: "Tremor", flash_texto: "Flash de texto",
+  selo: "Selo", emote: "Emote", sfx: "Efeito sonoro",
 };
 const CLIMAS = { tensao: "Tensão", corte_seco: "Corte seco (música para)", triste: "Triste", epico: "Épico", comico: "Cômico" };
 
@@ -54,7 +56,7 @@ async function loadList() {
     const thumb = p.result?.thumb;
     el.innerHTML = `${thumb ? `<img alt="">` : `<div class="ph"></div>`}<div class="meta"><div class="name"></div><div class="sub"></div></div>`;
     if (thumb) $("img", el).src = `/media/${thumb}?v=${p.rev}`;
-    $(".name", el).textContent = p.name;
+    $(".name", el).textContent = prettyName(p.name);
     $(".sub", el).textContent = `${STAGES[p.status] || p.status} · ${new Date(p.created * 1000).toLocaleString("pt-BR")}`;
     el.onclick = () => (location.hash = `#/p/${p.id}`);
     return el;
@@ -96,12 +98,13 @@ async function openProject(id, first = false) {
 }
 
 function renderProject(p, first) {
-  $("#proj-title").textContent = p.name;
+  $("#proj-title").textContent = prettyName(p.name);
   if (first) $("#src-video").src = `/api/pos/${p.id}/source`;
   const busy = BUSY.has(p.status);
   const st = $("#proj-status");
   st.innerHTML = `<div class="msg"></div>${busy ? `<div class="bar ${["planning", "queued", "watching"].includes(p.status) ? "indeterminate" : ""}"><i></i></div>` : ""}${p.error ? `<div class="err"></div>` : ""}`;
-  $(".msg", st).textContent = `${STAGES[p.status] || p.status} — ${p.message || ""}`;
+  const stage = STAGES[p.status] || p.status;
+  $(".msg", st).textContent = p.message && p.message !== stage ? `${stage} — ${p.message}` : stage;
   if (busy) $(".bar > i", st).style.width = `${Math.round((p.progress || 0) * 100)}%`;
   if (p.error) $(".err", st).textContent = p.error;
 
@@ -131,6 +134,7 @@ function renderPlan(plan) {
     $(".t", tr).onclick = () => { const v = $("#src-video"); v.currentTime = Math.max(0, b.t - 1); v.play(); };
     $(".what", tr).textContent = b.o_que;
     $(".edit b", tr).textContent = TIPOS[b.tipo] || b.tipo;
+    $(".edit b", tr).className = `chip ${b.tipo === "sfx" ? "info" : b.tipo === "flash_texto" ? "warn" : "accent"}`;
     const detail = $(".detail", tr);
     if (b.tipo === "flash_texto" || b.tipo === "selo") {
       const input = document.createElement("input");
@@ -143,7 +147,7 @@ function renderPlan(plan) {
     } else if (b.forca) {
       detail.textContent = b.tipo === "tremor" ? `${b.forca}px` : `${b.forca}x`;
     }
-    $(".why", tr).textContent = [b.motivo, b.aviso && `⚠ ${b.aviso}`].filter(Boolean).join(" · ");
+    $(".why", tr).textContent = [b.motivo, b.aviso && `Atenção: ${b.aviso}`].filter(Boolean).join(" · ");
     return tr;
   }));
   $("#trilha").replaceChildren(...plan.trilha.map((s) => {

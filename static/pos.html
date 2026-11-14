@@ -4,19 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí · Pós-edição</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20261114g">
 </head>
 <body>
 <header class="top">
-  <a href="#" class="brand" data-nav="home">✂️ Cortaí</a>
-  <nav class="nav"><a href="index.html">Cortes com IA</a><a href="studio.html">Estúdio (editor)</a><a href="pos.html" class="on">✨ Pós-edição</a></nav>
-  <span class="tag">clipe pronto → zooms, efeitos, trilha e voz destacada</span>
+  <a href="index.html" class="brand">Cortaí</a>
+  <nav class="nav"><a href="index.html"><i class="ic ic-scissors"></i>Cortes com IA</a><a href="pos.html" class="on"><i class="ic ic-sparkles"></i>Pós-edição</a><a href="studio.html"><i class="ic ic-film"></i>Estúdio</a></nav>
 </header>
 
 <main id="home" class="view">
+  <div class="page-head">
+    <div>
+      <h1>Pós-edição</h1>
+      <p>O Claude assiste a um clipe pronto e marca onde entram zoom, tremor, texto, emote, efeito sonoro e trilha. Você revisa e renderiza: sai com trilha e sem trilha.</p>
+    </div>
+  </div>
   <section class="card">
-    <h1>Pós-edição de um vídeo pronto</h1>
-    <p class="muted small">O Claude assiste ao clipe e marca onde entram zoom, tremor, texto, emote, efeito sonoro e trilha. Você revisa a tabela e renderiza. Sai uma versão com trilha e outra sem (para pôr a música do TikTok).</p>
     <form id="pos-form">
       <label class="field wide"><span>Vídeo no PC</span>
         <input name="local_path" type="text" placeholder="C:\Users\...\corte.mp4" required>
@@ -24,7 +27,7 @@
       <label class="field wide"><span>Pedido para o Claude <em>(opcional)</em></span>
         <textarea name="instructions" rows="2" placeholder="Ex.: exagera nos zooms; sem emote; o momento é a queda na lava"></textarea>
       </label>
-      <button class="primary" type="submit">✨ Analisar</button>
+      <button class="primary btn-lg" type="submit"><i class="ic ic-sparkles"></i>Analisar clipe</button>
       <p class="form-error" id="form-error"></p>
     </form>
   </section>
@@ -35,20 +38,20 @@
     <div class="lib-row">
       <input id="lib-dir" type="text">
       <button class="secondary" id="lib-save">Usar esta pasta</button>
-      <button class="ghost" id="lib-open">📂 Abrir pasta</button>
+      <button class="ghost" id="lib-open"><i class="ic ic-folder"></i>Abrir pasta</button>
     </div>
     <p class="muted small" id="lib-summary"></p>
   </section>
 
-  <h2>Pós-edições</h2>
+  <div class="section-head"><h2>Pós-edições</h2></div>
   <div id="pos-list" class="job-list"></div>
 </main>
 
 <main id="proj" class="view hidden">
   <div class="job-head">
-    <button class="ghost" data-nav="home">← Voltar</button>
+    <button class="ghost icon-btn" data-nav="home" title="Voltar" aria-label="Voltar"><i class="ic ic-arrow-left"></i></button>
     <h1 id="proj-title"></h1>
-    <button class="ghost danger" id="proj-delete">Excluir</button>
+    <button class="ghost danger" id="proj-delete"><i class="ic ic-trash"></i>Excluir</button>
   </div>
   <div id="proj-status" class="status"></div>
 
@@ -69,7 +72,7 @@
       </table>
       <p class="muted small" id="fim-note"></p>
       <div class="pos-actions">
-        <button class="primary" id="render-btn">Renderizar</button>
+        <button class="primary" id="render-btn"><i class="ic ic-play"></i>Renderizar</button>
         <input id="replan-text" type="text" placeholder="Pedir outro plano: ex. menos efeitos, mais tensão no começo">
         <button class="secondary" id="replan-btn">Pedir outro plano</button>
       </div>
@@ -87,10 +90,10 @@
   <article class="pos-out">
     <video controls playsinline preload="metadata"></video>
     <div class="out-meta"><b class="out-name"></b><span class="muted small out-stats"></span></div>
-    <a class="primary dl" download>Baixar</a>
+    <a class="primary dl" download><i class="ic ic-download"></i>Baixar</a>
   </article>
 </template>
 
-<script src="pos.js"></script>
+<script src="pos.js?v=20261114g"></script>
 </body>
 </html>

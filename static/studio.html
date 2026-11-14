@@ -4,21 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí Estúdio</title>
-<link rel="stylesheet" href="style.css">
-<link rel="stylesheet" href="studio.css">
+<link rel="stylesheet" href="style.css?v=20261114g">
+<link rel="stylesheet" href="studio.css?v=20261114g">
 </head>
 <body class="studio">
 
 <!-- lista de projetos -->
 <div id="list-view" class="hidden">
   <header class="top">
-    <a href="index.html" class="brand">✂️ Cortaí</a>
-    <nav class="nav"><a href="index.html">Cortes com IA</a><a href="studio.html" class="on">Estúdio</a><a href="pos.html">✨ Pós-edição</a></nav>
+    <a href="index.html" class="brand">Cortaí</a>
+    <nav class="nav"><a href="index.html"><i class="ic ic-scissors"></i>Cortes com IA</a><a href="pos.html"><i class="ic ic-sparkles"></i>Pós-edição</a><a href="studio.html" class="on"><i class="ic ic-film"></i>Estúdio</a></nav>
   </header>
   <main class="view">
     <section class="card st-new">
-      <h1>Novo projeto no Estúdio</h1>
-      <p class="muted">Editor de vídeo completo, sem IA e sem subir nada para a internet: as mídias são usadas direto do seu PC.</p>
+      <h1>Estúdio</h1>
+      <p class="muted" style="margin:0 0 6px">Editor de vídeo completo, sem IA e sem subir nada para a internet: as mídias são usadas direto do seu PC.</p>
       <div class="st-new-row">
         <input id="new-name" placeholder="Nome do projeto">
         <div class="ratio-pick" id="ratio-pick">
@@ -31,7 +31,7 @@
         <button class="primary" id="new-btn">Criar projeto</button>
       </div>
     </section>
-    <h2>Projetos</h2>
+    <div class="section-head"><h2>Projetos</h2></div>
     <div id="projects" class="projects"></div>
   </main>
 </div>
@@ -39,12 +39,12 @@
 <!-- editor -->
 <div id="editor-view" class="ed hidden">
   <header class="ed-top">
-    <a href="#" class="ghost small" id="back">← Projetos</a>
+    <a href="#" class="ghost small" id="back"><i class="ic ic-arrow-left"></i>Projetos</a>
     <input id="p-name" class="p-name" maxlength="120">
     <span class="save-state muted small" id="save-state"></span>
     <div class="spacer"></div>
-    <button class="ghost" id="undo" title="Desfazer (Ctrl+Z)">↶</button>
-    <button class="ghost" id="redo" title="Refazer (Ctrl+Y)">↷</button>
+    <button class="ghost icon-btn" id="undo" title="Desfazer (Ctrl+Z)" aria-label="Desfazer"><i class="ic ic-undo"></i></button>
+    <button class="ghost icon-btn" id="redo" title="Refazer (Ctrl+Y)" aria-label="Refazer"><i class="ic ic-redo"></i></button>
     <button class="primary" id="export-btn">Exportar</button>
   </header>
 
@@ -102,12 +102,12 @@
 
   <section class="ed-timeline">
     <div class="tl-tools">
-      <button class="ghost small" id="tl-split" title="Dividir no cursor (S)">✂ Dividir</button>
+      <button class="ghost small" id="tl-split" title="Dividir no cursor (S)"><i class="ic ic-scissors"></i>Dividir</button>
       <button class="ghost small" id="tl-dup" title="Duplicar (Ctrl+D)">⧉ Duplicar</button>
-      <button class="ghost small" id="tl-del" title="Excluir (Delete)">🗑 Excluir</button>
+      <button class="ghost small" id="tl-del" title="Excluir (Delete)"><i class="ic ic-trash"></i>Excluir</button>
       <button class="ghost small" id="tl-trim-l" title="Apagar do começo do item até o cursor (Q)">⇤ Q</button>
       <button class="ghost small" id="tl-trim-r" title="Apagar do cursor até o fim do item (W)">W ⇥</button>
-      <button class="ghost small" id="tl-freeze" title="Congelar o quadro do cursor por 2 s (F)">❄ Congelar</button>
+      <button class="ghost small" id="tl-freeze" title="Congelar o quadro do cursor por 2 s (F)"><i class="ic ic-snow"></i>Congelar</button>
       <label class="check small"><input type="checkbox" id="tl-snap" checked> Ímã</label>
       <div class="spacer"></div>
       <span class="muted small">Zoom</span>
@@ -118,8 +118,8 @@
         <div class="tl-ruler-head"></div>
         <div class="tl-head" data-track="text">T Texto</div>
         <div class="tl-head" data-track="overlay">⧉ Sobreposição</div>
-        <div class="tl-head main" data-track="main">🎬 Principal</div>
-        <div class="tl-head" data-track="audio">♪ Áudio</div>
+        <div class="tl-head main" data-track="main"><i class="ic ic-film"></i>Principal</div>
+        <div class="tl-head" data-track="audio"><i class="ic ic-music"></i>Áudio</div>
       </div>
       <div class="tl-scroll" id="tl-scroll">
         <div class="tl-content" id="tl-content">
@@ -152,6 +152,6 @@
   </div>
 </dialog>
 
-<script src="studio.js"></script>
+<script src="studio.js?v=20261114g"></script>
 </body>
 </html>

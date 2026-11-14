@@ -4,23 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20261114g">
 </head>
 <body>
 <header class="top">
-  <a href="#" class="brand" data-nav="home">✂️ Cortaí</a>
-  <nav class="nav"><a href="index.html" class="on">Cortes com IA</a><a href="studio.html">Estúdio (editor)</a><a href="pos.html">✨ Pós-edição</a></nav>
-  <span class="tag">vídeos longos → cortes virais, com o Claude escolhendo</span>
+  <a href="#" class="brand" data-nav="home">Cortaí</a>
+  <nav class="nav"><a href="index.html" class="on"><i class="ic ic-scissors"></i>Cortes com IA</a><a href="pos.html"><i class="ic ic-sparkles"></i>Pós-edição</a><a href="studio.html"><i class="ic ic-film"></i>Estúdio</a></nav>
   <span id="ai-status" class="ai-status"></span>
 </header>
 
 <main id="home" class="view">
+  <div class="page-head">
+    <div>
+      <h1>Novo projeto</h1>
+      <p>Jogue uma live, um VOD ou um podcast: o Claude assiste, escolhe os momentos e entrega os cortes prontos.</p>
+    </div>
+  </div>
   <section class="card new-job">
-    <h1>Novo projeto</h1>
     <div class="tabs" role="tablist">
-      <button class="tab active" data-src="url">Link</button>
-      <button class="tab" data-src="file">Enviar arquivo</button>
-      <button class="tab" data-src="path">Arquivo no PC</button>
+      <button class="tab active" data-src="url"><i class="ic ic-link"></i>Link</button>
+      <button class="tab" data-src="file"><i class="ic ic-upload"></i>Enviar arquivo</button>
+      <button class="tab" data-src="path"><i class="ic ic-monitor"></i>Arquivo no PC</button>
     </div>
     <form id="job-form">
       <div class="src src-url">
@@ -46,7 +50,7 @@
         <label class="field"><span>Tipo de projeto</span>
           <select name="mode">
             <option value="clips">Vários cortes</option>
-            <option value="highlights">Melhores momentos da partida (1 vídeo)</option>
+            <option value="highlights">Resumo narrado da partida (1 vídeo)</option>
           </select>
         </label>
         <label class="field hl-only hidden"><span>Escolher os lances pela</span>
@@ -128,23 +132,24 @@
           <label class="field check"><input name="cover_in_video" type="checkbox"><span>Gravar a capa no fim do vídeo também</span></label>
         </div>
       </details>
-      <p class="hint hl-only hidden">Sai um <b>short vertical de 60–90 s</b> e uma <b>versão horizontal</b> com os melhores lances, mais o <b>roteiro de narração</b> (.txt e .srt) para você gravar por cima no CapCut. Quantidade e duração dos clipes são decididas pela partida.</p>
-      <button class="primary" type="submit" id="submit">Gerar cortes</button>
+      <p class="hint hl-only hidden">Conta a <b>partida inteira em ordem</b> — kickoff, todos os gols, viradas, prorrogação e resultado, sem tempo morto — num <b>short vertical</b> e numa <b>versão horizontal</b>, com o <b>roteiro de narração</b> (.txt e .srt) para você gravar por cima no CapCut. Quantidade e duração dos clipes são decididas pela partida.</p>
+      <button class="primary btn-lg" type="submit" id="submit">Gerar cortes</button>
       <p class="form-error" id="form-error"></p>
     </form>
   </section>
 
   <section>
-    <h2>Projetos</h2>
+    <div class="section-head"><h2>Projetos</h2></div>
     <div id="job-list" class="job-list"></div>
   </section>
 
   <section>
-    <h2>Estilos de corte</h2>
-    <p class="muted">Cole links de cortes que você admira: o app assiste, e o Claude escreve um guia de como cortar igual. Use o estilo ao criar um projeto.</p>
+    <div class="section-head"><h2>Estilos de corte</h2></div>
+    <p class="muted" style="margin:-6px 0 16px">Cole links de cortes que você admira: o app assiste e o Claude escreve um guia de como cortar igual. Escolha o estilo ao criar um projeto.</p>
     <div id="style-list" class="style-list"></div>
     <form id="style-form" class="card style-form">
       <h3>Aprender um estilo novo</h3>
+      <p class="muted small" style="margin:-6px 0 0">O Claude assiste aos cortes e escreve um guia de ritmo, gancho e edição para usar nos seus projetos.</p>
       <label class="field"><span>Nome</span><input name="name" placeholder="Ex.: Cortes do Gaules"></label>
       <label class="field"><span>Links dos cortes (um por linha, até 6, cada um com até 10 min)</span>
         <textarea name="urls" rows="3" placeholder="https://www.youtube.com/shorts/..."></textarea></label>
@@ -158,9 +163,9 @@
 
 <main id="job" class="view hidden">
   <div class="job-head">
-    <button class="ghost" data-nav="home">← Voltar</button>
+    <button class="ghost icon-btn" data-nav="home" title="Voltar" aria-label="Voltar"><i class="ic ic-arrow-left"></i></button>
     <h1 id="job-title"></h1>
-    <button class="ghost danger" id="delete-job">Excluir</button>
+    <button class="ghost danger" id="delete-job"><i class="ic ic-trash"></i>Excluir projeto</button>
   </div>
   <div id="job-status" class="status"></div>
 
@@ -171,7 +176,7 @@
         <select id="match-basis"><option value="fala_imagem">fala + imagem</option><option value="imagem">só imagem</option></select>
       </label>
     </div>
-    <p class="muted small">O Claude separou a live pelo HUD do jogo (início, placar e tela de resultado). Marque as partidas que você quer em vídeo: cada uma vira um projeto de melhores momentos (short vertical + horizontal + roteiro).</p>
+    <p class="muted small">O Claude separou a live pelo HUD do jogo (início, placar e tela de resultado). Marque as partidas que você quer em vídeo: cada uma vira um resumo narrado (short vertical + horizontal + roteiro).</p>
     <table class="beats matches"><tbody id="match-rows"></tbody></table>
     <div class="pos-actions">
       <button class="primary" id="match-go" disabled>Gerar vídeos das partidas marcadas</button>
@@ -181,18 +186,18 @@
   </section>
 
   <section id="highlight" class="card hl-panel hidden">
-    <h2 id="hl-title">Melhores momentos</h2>
+    <h2 id="hl-title">Resumo da partida</h2>
     <p class="muted small" id="hl-post"></p>
     <div class="hl-outs">
       <article class="hl-out" data-key="vertical">
         <video controls playsinline preload="metadata"></video>
         <div><b>Short vertical</b> <span class="muted small info"></span></div>
-        <div class="actions"><a class="primary dl" download>Baixar vídeo</a><a class="ghost txt" download>Roteiro .txt</a><a class="ghost srt" download>Roteiro .srt</a></div>
+        <div class="actions"><a class="primary dl" download><i class="ic ic-download"></i>Baixar vídeo</a><a class="ghost txt" download><i class="ic ic-list"></i>Roteiro .txt</a><a class="ghost srt" download><i class="ic ic-captions"></i>.srt</a></div>
       </article>
       <article class="hl-out wide" data-key="horizontal">
         <video controls playsinline preload="metadata"></video>
         <div><b>Horizontal (YouTube)</b> <span class="muted small info"></span></div>
-        <div class="actions"><a class="primary dl" download>Baixar vídeo</a><a class="ghost txt" download>Roteiro .txt</a><a class="ghost srt" download>Roteiro .srt</a></div>
+        <div class="actions"><a class="primary dl" download><i class="ic ic-download"></i>Baixar vídeo</a><a class="ghost txt" download><i class="ic ic-list"></i>Roteiro .txt</a><a class="ghost srt" download><i class="ic ic-captions"></i>.srt</a></div>
       </article>
     </div>
     <div class="hl-script">
@@ -200,7 +205,7 @@
         <h4>Roteiro de narração</h4>
         <select id="hl-script-pick"><option value="vertical">Short vertical</option><option value="horizontal">Horizontal</option></select>
         <button class="ghost" id="hl-copy">Copiar</button>
-        <button class="secondary" id="hl-compile" title="Depois de editar um lance, monte os dois vídeos de novo">↻ Remontar vídeos</button>
+        <button class="secondary" id="hl-compile" title="Depois de editar um lance, monte os dois vídeos de novo"><i class="ic ic-refresh"></i>Remontar vídeos</button>
       </div>
       <p class="muted small">Os tempos são do vídeo final. Importe o .srt no CapCut como legenda para ver onde cada fala entra enquanto grava.</p>
       <pre id="hl-script"></pre>
@@ -220,13 +225,13 @@
   </section>
 
   <div id="job-tools" class="job-tools hidden">
-    <button class="secondary" data-panel="create-panel">＋ Criar clipe</button>
-    <button class="secondary" data-panel="apply-panel">🎨 Estilo de todos os clipes</button>
-    <button class="secondary" data-panel="reselect">✨ Pedir outros cortes ao Claude</button>
-    <button class="secondary" id="map-btn" title="O Claude separa a live por partida (início, fim, placar e resultado)">🗺 Separar por partida</button>
-    <button class="secondary" id="retitle-btn" title="Títulos e posts novos para estes clipes, sem refazer os cortes">🏷 Gerar títulos</button>
-    <button class="secondary hidden" id="covers-btn" title="Capa (thumbnail) para os clipes que ainda não têm">🖼 Gerar capas</button>
-    <a class="secondary" id="zip-btn" href="#">⬇ Baixar todos (.zip)</a>
+    <button class="secondary" data-panel="create-panel"><i class="ic ic-plus"></i>Criar clipe</button>
+    <button class="secondary" data-panel="apply-panel"><i class="ic ic-palette"></i>Estilo de todos</button>
+    <button class="secondary" data-panel="reselect"><i class="ic ic-sparkles"></i>Pedir outros cortes</button>
+    <button class="secondary" id="map-btn" title="O Claude separa a live por partida (início, fim, placar e resultado)"><i class="ic ic-map"></i>Separar por partida</button>
+    <button class="secondary" id="retitle-btn" title="Títulos e posts novos para estes clipes, sem refazer os cortes"><i class="ic ic-tag"></i>Gerar títulos</button>
+    <button class="secondary hidden" id="covers-btn" title="Capa (thumbnail) para os clipes que ainda não têm"><i class="ic ic-image"></i>Gerar capas</button>
+    <a class="secondary" id="zip-btn" href="#"><i class="ic ic-download"></i>Baixar todos (.zip)</a>
   </div>
 
   <section id="reselect" class="card panel hidden">
@@ -237,7 +242,7 @@
 
   <section id="create-panel" class="card panel hidden">
     <h3>Criar clipe a partir da transcrição</h3>
-    <input id="search-input" placeholder="Busque uma frase dita no vídeo (ex.: trave)">
+    <input id="search-input" type="search" placeholder="Busque uma frase dita no vídeo (ex.: trave)">
     <div id="search-results" class="search-results"></div>
   </section>
 
@@ -293,20 +298,26 @@
           <b>Capa</b>
           <span class="muted small cover-note"></span>
           <div class="cover-actions">
-            <button class="secondary cover-edit" type="button">🖼 Editar capa</button>
-            <a class="ghost cover-dl" download>Baixar capa</a>
+            <button class="secondary cover-edit" type="button"><i class="ic ic-image"></i><span>Editar capa</span></button>
+            <a class="ghost cover-dl" download><i class="ic ic-download"></i>Baixar capa</a>
           </div>
         </div>
       </div>
       <div class="actions">
-        <a class="primary dl" download>Baixar</a>
-        <button class="secondary edit">Editar</button>
-        <button class="ghost studio" title="Abrir este trecho no editor completo">🎬 Estúdio</button>
-        <button class="ghost posedit" title="Zooms, efeitos sonoros, trilha e voz destacada neste clipe pronto">✨ Pós-edição</button>
-        <button class="ghost copy">Copiar post</button>
-        <a class="ghost srt" download>.srt</a>
-        <a class="ghost frames" target="_blank" rel="noopener">Frames</a>
-        <button class="ghost danger del" title="Excluir clipe">🗑</button>
+        <a class="primary dl" download><i class="ic ic-download"></i>Baixar</a>
+        <button class="secondary edit"><i class="ic ic-edit"></i>Editar</button>
+        <details class="menu">
+          <summary class="ghost icon-btn" title="Mais ações" aria-label="Mais ações"><i class="ic ic-more"></i></summary>
+          <div class="menu-list">
+            <button class="posedit" title="Zooms, efeitos sonoros, trilha e voz destacada neste clipe pronto"><i class="ic ic-sparkles"></i><span>Pós-edição</span></button>
+            <button class="studio" title="Abrir este trecho no editor completo"><i class="ic ic-film"></i><span>Abrir no Estúdio</span></button>
+            <button class="copy"><i class="ic ic-copy"></i><span>Copiar post</span></button>
+            <a class="srt" download><i class="ic ic-captions"></i><span>Baixar legenda (.srt)</span></a>
+            <a class="frames" target="_blank" rel="noopener"><i class="ic ic-frames"></i><span>Ver frames analisados</span></a>
+            <hr>
+            <button class="danger del"><i class="ic ic-trash"></i><span>Excluir clipe</span></button>
+          </div>
+        </details>
       </div>
       <p class="clip-error form-error"></p>
     </div>
@@ -317,7 +328,7 @@
   <div class="ed-head">
     <input id="ed-title" class="ed-title" maxlength="200" list="ed-title-options" title="Clique ou apague o texto para ver as outras opções do Claude">
     <datalist id="ed-title-options"></datalist>
-    <button class="ghost" id="ed-close" aria-label="Fechar">✕</button>
+    <button class="ghost icon-btn" id="ed-close" aria-label="Fechar" title="Fechar"><i class="ic ic-x"></i></button>
   </div>
   <div id="ed-loading" class="ed-loading">Preparando prévia…</div>
   <div id="ed-body" class="ed-body hidden">
@@ -401,7 +412,7 @@
         <button class="ghost" id="ed-add-now" type="button" title="Colocar no ponto atual do vídeo">⏱ Agora</button>
         <label>Duração <input id="ed-add-dur" type="number" step="0.1" min="0.2" value="1.5"> s</label>
         <button class="primary" id="ed-add-ok" type="button">Adicionar</button>
-        <button class="ghost danger hidden" id="ed-add-del" type="button">🗑 Excluir</button>
+        <button class="ghost danger hidden" id="ed-add-del" type="button"><i class="ic ic-trash"></i>Excluir</button>
         <button class="ghost" id="ed-add-cancel" type="button">Cancelar</button>
         <p class="muted small">A legenda sai com o mesmo estilo das outras e, no trecho dela, aparece no lugar da fala. Para editar, mover ou excluir uma legenda adicionada, clique nela na transcrição (borda tracejada) ou arraste a barra verde dela na linha do tempo.</p>
       </div>
@@ -417,9 +428,9 @@
 
 <dialog id="cover-dlg">
   <div class="ed-head">
-    <b class="cv-head-title">🖼 Capa do clipe</b>
+    <b class="cv-head-title"><i class="ic ic-image"></i>Capa do clipe</b>
     <span class="muted small" id="cv-sub"></span>
-    <button class="ghost" id="cv-close" aria-label="Fechar">✕</button>
+    <button class="ghost icon-btn" id="cv-close" aria-label="Fechar" title="Fechar"><i class="ic ic-x"></i></button>
   </div>
   <div id="cv-loading" class="ed-loading">Preparando a capa…</div>
   <div id="cv-body" class="cv-body hidden">
@@ -454,7 +465,7 @@
       <div class="ed-section">
         <div class="ed-words-head">
           <h4>Imagem</h4>
-          <button class="ghost small" id="cv-apex" type="button" title="Voltar para o quadro que o Cortaí escolheu">⭐ Momento ápice</button>
+          <button class="ghost small" id="cv-apex" type="button" title="Voltar para o quadro que o Cortaí escolheu"><i class="ic ic-star"></i>Momento ápice</button>
         </div>
         <div class="cv-frames" id="cv-frames"></div>
         <p class="muted small hidden" id="cv-origin"></p>
@@ -473,12 +484,12 @@
   </div>
   <div class="ed-foot">
     <p class="form-error" id="cv-error"></p>
-    <a class="ghost" id="cv-download" download>Baixar capa</a>
+    <a class="ghost" id="cv-download" download><i class="ic ic-download"></i>Baixar capa</a>
     <button class="ghost" id="cv-cancel">Cancelar</button>
     <button class="primary" id="cv-save">Salvar capa</button>
   </div>
 </dialog>
 
-<script src="app.js"></script>
+<script src="app.js?v=20261114g"></script>
 </body>
 </html>

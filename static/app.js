@@ -1,5 +1,7 @@
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+// nome para exibir: o arquivo baixado vem como "Tentando+pegar+champ (1).mp4"
+const prettyName = (s) => { s = s || ""; try { s = decodeURIComponent(s); } catch {} return s.replace(/\+/g, " ").replace(/\.(mp4|mkv|mov|webm|flv|avi|ts)$/i, "").trim() || s; };
 
 const STAGES = {
   queued: "Na fila",
@@ -295,7 +297,7 @@ async function loadJobs() {
     el.className = "job-item";
     el.innerHTML = `${j.thumb ? `<img alt="" src="/media/${j.thumb}">` : `<div class="ph"></div>`}
       <div class="meta"><div class="name"></div><div class="sub"></div></div>`;
-    $(".name", el).textContent = j.name;
+    $(".name", el).textContent = prettyName(j.name);
     $(".sub", el).textContent = `${STAGES[j.status] || j.status}${j.clips ? ` · ${j.clips} clipes` : ""} · ${new Date(j.created * 1000).toLocaleString("pt-BR")}`;
     el.onclick = () => (location.hash = `#/job/${j.id}`);
     return el;
@@ -319,7 +321,7 @@ async function openJob(id) {
 }
 
 function renderJob(job) {
-  $("#job-title").textContent = job.name;
+  $("#job-title").textContent = prettyName(job.name);
   const st = $("#job-status");
   const busy = BUSY.has(job.status);
   const indeterminate = ["selecting", "downloading", "queued", "titling"].includes(job.status) ||
@@ -328,7 +330,9 @@ function renderJob(job) {
     ${job.error ? `<div class="err"></div>` : ""}`;
   const extra = job.backend ? ` · IA: ${{ cli: "Claude Code", api: "API Anthropic", manual: "manual" }[job.backend]}` : "";
   const dur = job.source.duration ? ` · vídeo de ${fmtTime(job.source.duration)}` : "";
-  $(".msg", st).textContent = `${STAGES[job.status] || job.status} — ${job.message || ""}${dur}${extra}`;
+  const stage = STAGES[job.status] || job.status;
+  const msg = job.message && job.message !== stage ? `${stage} — ${job.message}` : stage;
+  $(".msg", st).textContent = `${msg}${dur}${extra}`;
   if (busy) $(".bar > i", st).style.width = `${Math.round((job.progress || 0) * 100)}%`;
   if (job.error) $(".err", st).textContent = job.error;
 
@@ -396,7 +400,8 @@ $("#apply-btn").onclick = async () => {
 };
 
 // ---- partidas da live
-const RESULT = { vitoria: "✅ Vitória", derrota: "❌ Derrota", empate: "➖ Empate", desconhecido: "?" };
+const RESULT = { vitoria: ["Vitória", "accent"], derrota: ["Derrota", "danger"], empate: ["Empate", "warn"],
+  desconhecido: ["Sem resultado", ""] };
 function renderMatches(job) {
   const panel = $("#partidas");
   const list = job.partidas || [];
@@ -409,7 +414,9 @@ function renderMatches(job) {
     $("input", tr).checked = keep.has(m.n);
     $("input", tr).onchange = updateMatchCount;
     $(".t", tr).textContent = `${fmtTime(m.inicio)} → ${fmtTime(m.fim)} · ${Math.round((m.fim - m.inicio) / 60)} min`;
-    $(".res", tr).textContent = RESULT[m.resultado] || m.resultado;
+    const [resText, resKind] = RESULT[m.resultado] || [m.resultado, ""];
+    $(".res", tr).textContent = resText;
+    $(".res", tr).className = `res chip ${resKind}`;
     $(".score-txt", tr).textContent = m.placar;
     $(".what", tr).textContent = m.resumo;
     $(".meta", tr).textContent = [m.jogo, m.modo, `destaque ${m.destaque}`].filter(Boolean).join(" · ");
@@ -577,12 +584,18 @@ function fillCover(el, c, done) {
   dl.classList.toggle("hidden", !has);
   dl.href = src;
   dl.download = `${String(c.n).padStart(2, "0")}-capa.jpg`;
-  $(".cover-edit", el).textContent = has ? "🖼 Editar capa" : "🖼 Fazer capa";
+  $(".cover-edit span", el).textContent = has ? "Editar capa" : "Fazer capa";
   $(".cover-note", el).textContent = c.cover_error ? `Erro: ${c.cover_error}`
     : !has ? "Este clipe ainda não tem capa."
     : c.cover?.in_video ? "1080×1920 · também no fim do vídeo"
     : "1080×1920 · suba no “Editar capa” do TikTok";
 }
+
+document.addEventListener("click", (e) => {
+  $$("details.menu[open]").forEach((m) => {
+    if (!m.contains(e.target) || e.target.closest(".menu-list > button, .menu-list > a")) m.removeAttribute("open");
+  });
+});
 
 function bindClip(el, jobId, n) {
   $(".edit", el).onclick = () => openEditor(jobId, n);
@@ -591,12 +604,14 @@ function bindClip(el, jobId, n) {
   $(".copy", el).onclick = async (e) => {
     const c = el._clip;
     await navigator.clipboard.writeText(c.post || `${c.title}\n\n${(c.hashtags || []).join(" ")}`);
-    e.target.textContent = "Copiado!";
-    setTimeout(() => (e.target.textContent = "Copiar post"), 1500);
+    const label = $("span", e.currentTarget);
+    label.textContent = "Copiado!";
+    setTimeout(() => (label.textContent = "Copiar post"), 1500);
   };
   $(".studio", el).onclick = async (e) => {
-    e.target.disabled = true;
-    e.target.textContent = "Abrindo…";
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    $("span", btn).textContent = "Abrindo…";
     try {
       const p = await postJSON("/api/studio/projects", {
         name: el._clip.title, ratio: "9:16", from_clip: { job: jobId, n },
@@ -604,18 +619,19 @@ function bindClip(el, jobId, n) {
       location.href = `studio.html#/p/${p.id}`;
     } catch (ex) {
       alert(ex.message);
-      e.target.disabled = false;
-      e.target.textContent = "🎬 Estúdio";
+      btn.disabled = false;
+      $("span", btn).textContent = "Abrir no Estúdio";
     }
   };
   $(".posedit", el).onclick = async (e) => {
-    e.target.disabled = true;
+    const btn = e.currentTarget;
+    btn.disabled = true;
     try {
       const p = await postJSON("/api/pos", { job: jobId, n });
       location.href = `pos.html#/p/${p.id}`;
     } catch (ex) {
       alert(ex.message);
-      e.target.disabled = false;
+      btn.disabled = false;
     }
   };
   $(".del", el).onclick = async () => {

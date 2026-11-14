@@ -23,7 +23,7 @@ body.studio-editing { overflow: hidden; }
 .ed { position: fixed; inset: 0; display: grid; background: var(--bg);
   grid-template-columns: 280px 1fr 300px; grid-template-rows: 52px minmax(0, 1fr) 290px;
   grid-template-areas: "top top top" "bin player insp" "tl tl tl"; }
-.ed-top { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); background: #101016; }
+.ed-top { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); background: rgba(11, 11, 16, .92); }
 .ed-top .spacer, .tl-tools .spacer { flex: 1; }
 .p-name { max-width: 300px; background: transparent; border-color: transparent; font-weight: 700; }
 .p-name:hover { border-color: var(--line); }
@@ -55,7 +55,7 @@ body.studio-editing { overflow: hidden; }
 .trans-list button.on { border-color: var(--accent); color: var(--accent); }
 
 .ed-player { grid-area: player; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.stage-wrap { flex: 1; min-height: 0; display: grid; place-items: center; padding: 14px; background: #08080b; }
+.stage-wrap { flex: 1; min-height: 0; display: grid; place-items: center; padding: 14px; background: #07070a; }
 .stage { position: relative; overflow: hidden; background: #000; box-shadow: 0 0 0 1px var(--line); }
 .stage-bg { position: absolute; inset: 0; }
 .stage video.layer, .stage img.layer { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
@@ -86,21 +86,21 @@ body.studio-editing { overflow: hidden; }
 .insp-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .insp-actions button { font-size: 13px; padding: 6px 10px; }
 
-.ed-timeline { grid-area: tl; border-top: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: #111118; }
+.ed-timeline { grid-area: tl; border-top: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
 .tl-tools { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .tl-tools .ghost { padding: 4px 9px; }
 .tl-tools input[type=range] { width: 160px; padding: 0; }
 .tl-body { flex: 1; display: flex; min-height: 0; }
 .tl-heads { width: 118px; flex: none; border-right: 1px solid var(--line); }
 .tl-ruler-head { height: 26px; border-bottom: 1px solid var(--line); }
-.tl-head { height: 52px; display: flex; align-items: center; padding: 0 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid #1f1f29; }
+.tl-head { height: 52px; display: flex; align-items: center; gap: 7px; padding: 0 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .tl-head.main, .tl-track.main { height: 72px; }
 .tl-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; position: relative; }
 .tl-content { position: relative; min-width: 100%; }
 /* .ed .tl-ruler vence o ".ed-timeline canvas" do editor de clipes da página principal */
 .ed .tl-ruler { display: block; height: 26px; border-bottom: 1px solid var(--line); cursor: pointer; background: none; border-radius: 0; }
-.tl-track { position: relative; height: 52px; border-bottom: 1px solid #1f1f29; }
-.tl-track.drop { background: rgba(185, 242, 39, .06); }
+.tl-track { position: relative; height: 52px; border-bottom: 1px solid var(--line); }
+.tl-track.drop { background: var(--accent-soft); }
 .tl-item { position: absolute; top: 5px; bottom: 5px; border-radius: 6px; overflow: hidden; cursor: grab; border: 1px solid rgba(255,255,255,.12);
   font-size: 11px; color: #fff; user-select: none; }
 .tl-item.sel { border: 2px solid var(--accent); }
@@ -108,7 +108,7 @@ body.studio-editing { overflow: hidden; }
   text-shadow: 0 1px 2px #000; pointer-events: none; z-index: 2; }
 .tl-item .h { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 3; }
 .tl-item .h.l { left: 0; } .tl-item .h.r { right: 0; }
-.tl-item.sel .h { background: rgba(185, 242, 39, .55); }
+.tl-item.sel .h { background: var(--accent-ring); }
 .tl-item.video { background: #2d3a55 repeat-x; background-size: auto 100%; }
 .tl-item.image { background: #3d2d55 center/auto 100% repeat-x; }
 .tl-item.text { background: #7a3d22; }
@@ -134,7 +134,7 @@ body.studio-editing { overflow: hidden; }
 }
 
 .st-toast { position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 12px); opacity: 0; pointer-events: none;
-  background: #111118; color: #fff; border: 1px solid #3a3a4d; border-radius: 10px; padding: 8px 14px; font-size: 13px;
+  background: var(--bg); color: #fff; border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 14px; font-size: 13px;
   transition: opacity .15s, transform .15s; z-index: 1000; }
 .st-toast.on { opacity: 1; transform: translate(-50%, 0); }
 .insp-actions button.on { color: var(--accent); border-color: var(--accent); }
