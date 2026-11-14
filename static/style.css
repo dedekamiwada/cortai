@@ -622,3 +622,17 @@ button.small, .ghost.small, .secondary.small, .primary.small { min-height: 30px;
 .ic-chevron { --i: var(--i-chevron); }
 .ic-image { --i: var(--i-image); }
 .ic-star { --i: var(--i-star); }
+
+/* ---------------------------------------------------------------- revisão rápida (aprovar/rejeitar + atalhos) */
+.signals { display: flex; gap: 6px; flex-wrap: wrap; }
+.signals:empty { display: none; }
+.clip.focused { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring), var(--shadow); }
+.clip.is-ok { border-color: rgba(196, 245, 61, .55); }
+.clip.is-rejected { opacity: .55; }
+.clip.is-rejected:hover, .clip.is-rejected.focused { opacity: 1; }
+.approve.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.reject.on { color: var(--danger); background: var(--danger-soft); border-color: rgba(255, 122, 122, .4); }
+.reject-menu .menu-list { min-width: 230px; }
+kbd { font: 600 11px/1 var(--mono); padding: 3px 6px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--muted); }
+.menu-list kbd { margin-right: 2px; }
+.review-help { font-size: 12.5px; color: var(--subtle); margin: -6px 0 14px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }

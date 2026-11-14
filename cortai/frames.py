@@ -17,7 +17,7 @@ _cuda_ok: bool | None = None
 
 
 def sample(src: Path, start: float, end: float, n: int, width: int,
-           src_w: int, src_h: int) -> tuple[list[np.ndarray], list[float]]:
+           src_w: int, src_h: int, fast: bool = False) -> tuple[list[np.ndarray], list[float]]:
     """Decodifica o trecho uma vez (mais rápido que N buscas) e devolve até n quadros BGR."""
     global _cuda_ok
     dur = max(0.5, end - start)
@@ -27,7 +27,7 @@ def sample(src: Path, start: float, end: float, n: int, width: int,
             "-vf", f"fps={rate:.5f},scale={width}:{height}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
     size = width * height * 3
     data = b""
-    if 1 / rate >= KEYFRAME_ONLY_STEP:
+    if fast and 1 / rate >= KEYFRAME_ONLY_STEP:  # só varredura: o segundo de cada quadro fica aproximado
         fast = ["-skip_frame", "nokey"]
         if _cuda_ok is not False:
             proc = subprocess.run(["ffmpeg", "-v", "error", "-hwaccel", "cuda", *fast, *tail], capture_output=True)
@@ -47,11 +47,22 @@ def sample(src: Path, start: float, end: float, n: int, width: int,
     return frames, times
 
 
+FOCUS_SPAN = 2.0  # s em volta do pico que ganham metade dos quadros
+
+
 def grid(src: Path, start: float, end: float, out: Path, src_w: int, src_h: int,
-         n: int = 12, cols: int = 4) -> Path:
+         n: int = 12, cols: int = 4, focus: float | None = None, fast: bool = False) -> Path:
+    """Folha de n quadros. Com `focus` (o pico do lance), metade dos quadros cobre o trecho todo e a outra
+    metade fica em ±2 s do pico — o Claude julga o lance que importa, não o entorno."""
     vertical = src_w / src_h < 1
     width = 270 if vertical else 400
-    frames, times = sample(src, start, end, n, width, src_w, src_h)
+    if focus is not None and start < focus < end:
+        f1, t1 = sample(src, start, end, n - n // 2, width, src_w, src_h)
+        f2, t2 = sample(src, max(start, focus - FOCUS_SPAN), min(end, focus + FOCUS_SPAN), n // 2, width, src_w, src_h)
+        pairs = sorted(zip(t1 + t2, f1 + f2), key=lambda p: p[0])
+        times, frames = [p[0] for p in pairs], [p[1] for p in pairs]
+    else:
+        frames, times = sample(src, start, end, n, width, src_w, src_h, fast)
     if not frames:
         raise RuntimeError(f"não consegui extrair quadros de {start:.1f}s a {end:.1f}s")
     h, w = frames[0].shape[:2]

@@ -133,16 +133,63 @@ def audio_events(loud: list[float], words: list[dict]) -> list[dict]:
     return events
 
 
+
+# Pico de reação normalizado pelo próprio streamer: z-score robusto (mediana/MAD) numa janela de ~5 min
+# centrada no trecho, para compensar ganho do microfone e cansaço ao longo da live (recomendação da pesquisa
+# "Cortes de jogos e IAs de clipes"; os limiares são ponto de partida a calibrar).
+Z_WINDOW = 300.0     # s de contexto para a linha de base
+Z_BLOCK = 30.0       # s: a linha de base é recalculada a cada bloco (barato numa live de 3 h)
+Z_MIN = 4.5          # z robusto mínimo: ~60 picos/h numa live de 2,25 h (com 3.0 eram 175/h)
+Z_GAP = 8.0          # s mínimos entre picos (fica o mais forte)
+
+
+def robust_peaks(loud: list[float], z_min: float = Z_MIN) -> list[dict]:
+    """Picos de volume em z robusto contra a vizinhança de 5 min: [{t, z, db}] em ordem de tempo."""
+    if not loud:
+        return []
+    db = np.asarray(loud, dtype=np.float32)
+    n, blk, half = len(db), int(Z_BLOCK / HOP), int(Z_WINDOW / HOP / 2)
+    z = np.zeros(n, dtype=np.float32)
+    for a in range(0, n, blk):
+        b = min(n, a + blk)
+        c = (a + b) // 2
+        ctx = db[max(0, c - half): min(n, c + half)]
+        med = float(np.median(ctx))
+        mad = float(np.median(np.abs(ctx - med))) * 1.4826 or 1.0
+        z[a:b] = (db[a:b] - med) / max(mad, 1.0)
+    peaks: list[dict] = []
+    for i in np.argsort(-z):
+        if z[i] < z_min:
+            break
+        t = i * HOP
+        if all(abs(t - p["t"]) >= Z_GAP for p in peaks):
+            peaks.append({"t": round(t, 2), "z": round(float(z[i]), 1), "db": round(float(db[i]), 1)})
+    return sorted(peaks, key=lambda p: p["t"])
+
 LABELS = {
     "susto": "😱 SUSTO PROVÁVEL: silêncio e de repente som alto",
     "grito": "🔊 fala muito alta/grito",
     "som_alto": "💥 som alto SEM fala (risada, grito ou som do jogo)",
     "sem_fala_com_som": "🎮 sem fala mas com som (risada, reação ou jogo rolando)",
     "silencio": "🤐 silêncio",
+    # eventos do jogo lidos no placar (hud.py) e reação normalizada (robust_peaks)
+    "gol_nosso": "⚽ GOL DO TIME DO STREAMER (lido no placar)",
+    "gol_deles": "🥅 GOL SOFRIDO (lido no placar)",
+    "inicio": "🏁 começo de partida",
+    "fim_do_tempo": "⏱ fim do tempo normal → prorrogação",
+    "reacao": "📈 reação forte (volume muito acima do normal dele neste trecho da live)",
 }
 
 
 def describe(event: dict) -> str:
+    kind = event["kind"]
+    if kind in ("gol_nosso", "gol_deles"):
+        return (f"[{event['t']:.2f}] <{LABELS[kind]}: placar {event.get('placar') or '?'}"
+                f"{', relógio ' + event['relogio'] if event.get('relogio') else ''}; replay até {event.get('fim_pausa', event['t']):.0f}s>")
+    if kind in ("inicio", "fim_do_tempo"):
+        return f"[{event['t']:.2f}] <{LABELS[kind]}>"
+    if kind == "reacao":
+        return f"[{event['t']:.2f}] <{LABELS[kind]}: z={event.get('z', 0):.1f}>"
     extra = f", +{event['db']:.0f} dB" if event["kind"] in LOUD_KINDS else ""
     if event["kind"] == "susto":
         extra += f", salto de {event.get('jump', 0):.0f} dB vindo de um trecho baixo"

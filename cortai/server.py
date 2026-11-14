@@ -291,6 +291,17 @@ def compile_highlights(job_id: str):
     return {"ok": True}
 
 
+@app.post("/api/jobs/{job_id}/clips/{n}/feedback")
+async def clip_feedback(job_id: str, n: int, request: Request):
+    _job_or_404(job_id)
+    body = await request.json()
+    try:
+        fb = jobs.feedback(job_id, n, body.get("veredito") or "", body.get("motivo") or "")
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "feedback": fb}
+
+
 @app.post("/api/jobs/{job_id}/clips/{n}")
 async def rerender(job_id: str, n: int, request: Request):
     _job_or_404(job_id)

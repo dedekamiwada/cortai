@@ -44,7 +44,8 @@ def scan_sheets(src: Path, meta: dict, out_dir: Path, start: float, end: float,
         if b - a < step:
             break
         out = out_dir / f"s{i + 1:02d}.jpg"
-        frames.grid(src, a, b, out, meta["width"], meta["height"], n=max(2, round((b - a) / step)), cols=6)
+        frames.grid(src, a, b, out, meta["width"], meta["height"], n=max(2, round((b - a) / step)), cols=6,
+                    fast=True)
         sheets.append((out, a, b))
     return sheets
 

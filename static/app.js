@@ -533,6 +533,24 @@ function fillClip(el, c) {
   }
   $(".rendering", el).classList.toggle("hidden", done || c.status === "error");
   $(".rendering", el).textContent = c.status === "pending" ? "Na fila…" : "Renderizando…";
+  // sinais que sustentam o corte: âncora lida no placar/volume e o teste sem contexto
+  const sig = [];
+  const a = c.anchor;
+  if (a && a.kind === "gol_nosso") sig.push(`<span class="chip accent">Gol ${escapeHtml(a.placar || "")}</span>`);
+  else if (a && a.kind === "gol_deles") sig.push(`<span class="chip danger">Gol sofrido ${escapeHtml(a.placar || "")}</span>`);
+  else if (a && a.kind === "reacao") sig.push(`<span class="chip info">Reação forte</span>`);
+  if (c.estranho) sig.push(c.estranho.entende
+    ? `<span class="chip">Entende sem contexto</span>`
+    : c.contexto_tela
+      ? `<span class="chip info" title="Sem o texto, quem chega não entenderia: ${escapeHtml(c.estranho.motivo || "")}">Contexto na tela: ${escapeHtml(c.contexto_tela)}</span>`
+      : `<span class="chip warn" title="${escapeHtml(c.estranho.motivo || "")}">Falta contexto</span>`);
+  $(".signals", el).innerHTML = sig.join("");
+  const fb = c.feedback?.veredito || "";
+  el.classList.toggle("is-ok", fb === "ok");
+  el.classList.toggle("is-rejected", fb === "rejeitado");
+  $(".approve", el).classList.toggle("on", fb === "ok");
+  $(".reject", el).classList.toggle("on", fb === "rejeitado");
+  $(".reject", el).title = fb === "rejeitado" ? `Rejeitado: ${c.feedback.motivo || ""} (R para mudar)` : "Rejeitar com motivo (R)";
   const score = $(".score", el);
   score.textContent = c.score;
   score.className = `score ${c.score >= 75 ? "" : c.score >= 50 ? "mid" : "low"}`;
@@ -597,7 +615,58 @@ document.addEventListener("click", (e) => {
   });
 });
 
+async function sendFeedback(el, jobId, n, veredito, motivo = "") {
+  const cur = el._clip?.feedback?.veredito || "";
+  if (veredito === cur && veredito === "ok") veredito = "";  // clicar de novo em aprovar desfaz
+  try {
+    const r = await postJSON(`/api/jobs/${jobId}/clips/${n}/feedback`, { veredito, motivo });
+    el._clip.feedback = veredito ? r.feedback : null;
+    fillClip(el, el._clip);
+  } catch (ex) { alert(ex.message); }
+}
+
+// ---- atalhos de revisão: J/K (ou ←/→) navegam, A aprova, R rejeita (1–5 escolhe o motivo), espaço toca, E edita
+let focusIdx = -1;
+function focusClip(i) {
+  const list = $$("#clips .clip");
+  if (!list.length) return;
+  focusIdx = Math.max(0, Math.min(list.length - 1, i));
+  list.forEach((c, k) => c.classList.toggle("focused", k === focusIdx));
+  list[focusIdx].scrollIntoView({ block: "center", behavior: "smooth" });
+}
+document.addEventListener("keydown", (e) => {
+  if (!currentJob || $("#job").classList.contains("hidden") || e.ctrlKey || e.metaKey || e.altKey) return;
+  const tgt = e.target instanceof Element ? e.target : null;
+  if (tgt?.closest("input, textarea, select, [contenteditable]") || $("dialog[open]")) return;
+  const list = $$("#clips .clip");
+  const el = list[focusIdx];
+  const k = e.key.toLowerCase();
+  const openReject = el && $(".reject-menu", el).open;
+  if (openReject && /^[1-5]$/.test(k)) {
+    e.preventDefault();
+    $$(".reject-menu .menu-list button", el)[+k - 1].click();
+    return;
+  }
+  if (k === "j" || e.key === "ArrowRight") { e.preventDefault(); focusClip(focusIdx + 1); }
+  else if (k === "k" || e.key === "ArrowLeft") { e.preventDefault(); focusClip(focusIdx - 1); }
+  else if (!el) return;
+  else if (k === "a") { e.preventDefault(); $(".approve", el).click(); }
+  else if (k === "r") { e.preventDefault(); $(".reject-menu", el).open = !openReject; }
+  else if (k === "e") { e.preventDefault(); $(".edit", el).click(); }
+  else if (e.key === " ") { e.preventDefault(); const v = $("video", el); v.paused ? v.play() : v.pause(); }
+  else if (e.key === "Escape" && openReject) { $(".reject-menu", el).open = false; }
+});
+
 function bindClip(el, jobId, n) {
+  $(".approve", el).onclick = () => sendFeedback(el, jobId, n, "ok");
+  $$(".reject-menu .menu-list button", el).forEach((b) => {
+    b.onclick = () => sendFeedback(el, jobId, n, "rejeitado", b.dataset.motivo);
+  });
+  el.addEventListener("click", () => {
+    const list = $$("#clips .clip");
+    focusIdx = list.indexOf(el);
+    list.forEach((c) => c.classList.toggle("focused", c === el));
+  });
   $(".edit", el).onclick = () => openEditor(jobId, n);
   $(".cover-edit", el).onclick = () => openCover(jobId, n);
   $(".cover-thumb", el).onclick = () => openCover(jobId, n);

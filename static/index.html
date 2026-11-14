@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí</title>
-<link rel="stylesheet" href="style.css?v=20261114g">
+<link rel="stylesheet" href="style.css?v=20261114i">
 </head>
 <body>
 <header class="top">
@@ -277,6 +277,7 @@
     <p class="form-error" id="apply-error"></p>
   </section>
 
+  <p class="review-help" id="review-help"><span>Revisão rápida:</span><span><kbd>J</kbd>/<kbd>K</kbd> anda entre os cortes</span><span><kbd>A</kbd> aprova</span><span><kbd>R</kbd> rejeita (<kbd>1</kbd>–<kbd>5</kbd> motivo)</span><span><kbd>Espaço</kbd> toca</span><span><kbd>E</kbd> edita</span></p>
   <div id="clips" class="clips"></div>
 </main>
 
@@ -285,6 +286,7 @@
     <div class="player"><video controls preload="metadata" playsinline></video><div class="rendering hidden">Renderizando…</div></div>
     <div class="clip-body">
       <div class="clip-top"><span class="score"></span><span class="dur"></span><span class="layout"></span></div>
+      <div class="signals"></div>
       <div class="breakdown"></div>
       <h3 class="title"></h3>
       <p class="visual"></p>
@@ -306,6 +308,17 @@
       <div class="actions">
         <a class="primary dl" download><i class="ic ic-download"></i>Baixar</a>
         <button class="secondary edit"><i class="ic ic-edit"></i>Editar</button>
+        <button class="ghost icon-btn approve" title="Aprovar corte (A)" aria-label="Aprovar"><i class="ic ic-check"></i></button>
+        <details class="menu reject-menu">
+          <summary class="ghost icon-btn reject" title="Rejeitar com motivo (R)" aria-label="Rejeitar"><i class="ic ic-x"></i></summary>
+          <div class="menu-list">
+            <button data-motivo="punchline"><kbd>1</kbd>Cortou o punchline</button>
+            <button data-motivo="contexto"><kbd>2</kbd>Sem contexto</button>
+            <button data-motivo="momento"><kbd>3</kbd>Momento errado</button>
+            <button data-motivo="morto"><kbd>4</kbd>Tempo morto</button>
+            <button data-motivo="outro"><kbd>5</kbd>Outro motivo</button>
+          </div>
+        </details>
         <details class="menu">
           <summary class="ghost icon-btn" title="Mais ações" aria-label="Mais ações"><i class="ic ic-more"></i></summary>
           <div class="menu-list">
@@ -490,6 +503,6 @@
   </div>
 </dialog>
 
-<script src="app.js?v=20261114g"></script>
+<script src="app.js?v=20261114i"></script>
 </body>
 </html>

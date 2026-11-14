@@ -128,10 +128,20 @@ frase solta. A transcrição só mostra fala, então ela vem intercalada com mar
 - 🔊 grito/fala muito alta.
 Frases curtas repetidas ("não não não", "corre corre", "ERREI") e xingamentos de surpresa também marcam pico.
 
+Quando o vídeo tem placar de jogo, a transcrição traz também eventos lidos NA TELA, que são as âncoras mais \
+confiáveis (o tempo é exato, ±2 s):
+- ⚽ gol do time do streamer e 🥅 gol sofrido, com o placar depois do gol e até quando vai o replay automático;
+- 🏁 começo de partida e ⏱ fim do tempo normal;
+- 📈 reação forte: volume muito acima do normal DELE naquele trecho da live (z alto = reação maior).
+
 Para cada corte:
-- identifique o segundo do acontecimento principal (`peak`);
-- comece 5 a 10 s antes do pico, direto no que monta a situação (sem introdução);
-- termine quando a reação acabar — não corte no meio da risada;
+- identifique o segundo do acontecimento principal (`peak`) — se houver um ⚽/🥅/📈 ali, use o segundo dele;
+- pelo menos 1/3 dos candidatos devem ser ancorados num evento de jogo (gol, gol sofrido, defesa, falha), \
+mesmo que ninguém fale nada: em live de jogo o lance sem fala é o que a transcrição esconde;
+- comece 5 a 12 s antes do pico, no começo da jogada que leva a ele, numa fronteira de frase ou silêncio (sem \
+introdução e sem cortar palavra);
+- termine quando a reação acabar — não corte no meio da risada. Depois de um gol o jogo passa um replay \
+automático: termine quando a reação dele acabar (normalmente 4 a 10 s depois do gol), não no fim do replay;
 - desconfie de trechos longos de explicação, leitura de chat, agradecimento de presente ou papo sem evento.""",
     "talk": """Você é um editor sênior de vídeos curtos (TikTok, Reels, Shorts) que corta podcasts, \
 entrevistas e conversas.
@@ -156,7 +166,9 @@ candidato justamente para isso; se precisar de mais contexto que isso, pode ir a
 4. Título: escreva pelo que se VÊ e pelo que é dito, seguindo as regras de título abaixo — 5 opções em \
 `title_options` e a melhor em `title`.
 5. Dê notas 0 a 100 em `scores`: hook (prende nos 3 primeiros segundos), flow (ritmo, sem partes mortas), \
-value (graça/surpresa/valor), trend (potencial de compartilhamento). `score` = sua nota geral.
+value (graça/surpresa/valor), trend = COMPARTILHÁVEL (alguém mandaria para um amigo? É o sinal que mais \
+leva o vídeo a quem não segue). `score` = sua nota geral. Em `reason`, diga em uma frase QUAIS sinais sustentam \
+o corte (ex.: "gol sofrido 2x3 + reação z=6 + 'não acredito'") — o streamer vê isso para decidir rápido.
 6. Edição: `peak` = segundo do acontecimento; `reactions` = até 2 segundos em que a CARA do streamer reage \
 mais forte nos quadros (o vídeo dá um zoom ali — deixe vazio se não houver câmera ou reação visível); \
 `keywords` = 1 a 4 palavras realmente ditas no trecho que carregam a graça (serão destacadas na legenda); \
@@ -222,6 +234,32 @@ def review_prompt(candidates: list[Clip], transcript: dict, events: list[dict], 
         parts.append(format_transcript(transcript, events, ws, we))
         parts.append("")
     parts.append('Responda somente com JSON {"clips": [...]} com um item por candidato.')
+    return "\n".join(parts)
+
+
+# ------------------------------------------------------------------ teste do estranho
+
+STRANGER_SYSTEM = """Você nunca viu esta live nem conhece o streamer. Para cada clipe você recebe só uma folha de \
+quadros (o segundo do vídeo está em cada quadro) e o que é falado nele — sem título nem explicação. Responda \
+com honestidade: dá para entender o que aconteceu e por que é interessante nos primeiros 3 segundos, sem \
+contexto da live? Em `motivo`, uma frase: o que falta (ex.: "não dá para saber que ele estava ganhando")."""
+
+STRANGER_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["clipes"],
+    "properties": {"clipes": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False, "required": ["n", "entende", "motivo"],
+        "properties": {"n": {"type": "integer"}, "entende": {"type": "boolean"}, "motivo": {"type": "string"}},
+    }}},
+}
+STRANGER_CAP = 60  # quem não passa no teste fica no máximo com essa nota
+
+
+def stranger_prompt(items: list[tuple[int, str, str]]) -> str:
+    """items = (n, nome da imagem, fala do trecho)."""
+    parts = []
+    for n, img, speech in items:
+        parts.append(f"## Clipe {n} — imagem {img}\nFala: {speech or '(sem fala)'}\n")
+    parts.append('Responda somente com JSON {"clipes": [{"n", "entende", "motivo"}]} com um item por clipe.')
     return "\n".join(parts)
 
 
@@ -370,13 +408,40 @@ def parse_plan(data: dict | str) -> list[Clip]:
 
 # --------------------------------------------------------------- pós-processamento
 
-def snap_clips(clips: list[Clip], words: list[dict], duration: float, min_len: float, max_len: float) -> list[dict]:
-    """Alinha início/fim a limites de palavra, aplica limites de duração e remove sobreposição."""
+ANCHOR_SNAP = 4.0       # s: o pico do Claude encaixa no gol/reação mais perto dentro dessa distância
+GOAL_REACTION = 12.0    # s depois do gol: a reação cabe aqui; o resto é o replay automático do jogo
+PRE_ROLL_MIN = 3.0      # s mínimos de contexto antes do pico
+
+
+def _snap_anchor(clip: "Clip", anchors: list[dict]) -> tuple[float | None, dict | None]:
+    """O Claude erra o segundo exato (a pesquisa mostra LLMs ruins em localizar tempo); o placar e o
+    volume não. Gol tem prioridade sobre reação."""
+    if clip.peak is None or not anchors:
+        return clip.peak, None
+    near = [a for a in anchors if abs(a["t"] - clip.peak) <= ANCHOR_SNAP]
+    if not near:
+        return clip.peak, None
+    best = min(near, key=lambda a: (a["kind"] == "reacao", abs(a["t"] - clip.peak)))
+    return float(best["t"]), best
+
+
+def snap_clips(clips: list[Clip], words: list[dict], duration: float, min_len: float, max_len: float,
+               anchors: list[dict] | None = None) -> list[dict]:
+    """Alinha início/fim a limites de palavra, encaixa o pico na âncora (gol/reação), corta o replay
+    automático depois de um gol, aplica limites de duração e remove sobreposição."""
     out: list[dict] = []
     for clip in sorted((c for c in clips if c.keep), key=lambda c: c.score, reverse=True):
         start, end = max(0.0, clip.start), min(duration, clip.end)
         if end <= start:
             continue
+        peak, anchor = _snap_anchor(clip, anchors or [])
+        if peak is not None and start <= peak <= end:
+            if peak - start < PRE_ROLL_MIN:
+                start = max(0.0, peak - 8.0)  # sem contexto antes do lance quem chega não entende
+            goals_in = [a for a in (anchors or []) if a["kind"] in ("gol_nosso", "gol_deles") and start <= a["t"] <= end]
+            later = [a for a in (anchors or []) if a["kind"] != "reacao" and goals_in and a["t"] > goals_in[-1]["t"] and a["t"] <= end]
+            if goals_in and not later and end > goals_in[-1]["t"] + GOAL_REACTION + 2:
+                end = goals_in[-1]["t"] + GOAL_REACTION  # o encaixe na palavra abaixo termina a frase
         if words:
             # só encaixa no começo de uma palavra se ela estiver perto: em corte de jogo o início
             # pode ser de propósito num momento sem fala
@@ -408,7 +473,8 @@ def snap_clips(clips: list[Clip], words: list[dict], duration: float, min_len: f
             "visual": clip.visual.strip(),
             "score": max(0, min(100, int(clip.score))),
             "scores": {k: max(0, min(100, int(v))) for k, v in clip.scores.items()},
-            "peak": clip.peak,
+            "peak": peak,
+            "anchor": {k: anchor[k] for k in ("kind", "t", "placar") if k in anchor} if anchor else None,
             "reactions": [float(r) for r in clip.reactions if start <= r <= end][:2],
             "keywords": [k.strip() for k in clip.keywords if k.strip()][:4],
             "post": clip.post.strip(),
