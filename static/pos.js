@@ -29,7 +29,12 @@ async function api(path, opts = {}) {
 const postJSON = (path, body) => api(path, {
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
 });
-const sec = (t) => `${t.toFixed(1).replace(".", ",")} s`;
+// tempo no formato universal HH:MM:SS.d, igual ao resto do Cortaí
+const sec = (t) => {
+  t = Math.round(Math.max(0, t || 0) * 10) / 10;
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), r = t - h * 3600 - m * 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${r.toFixed(1).padStart(4, "0")}`;
+};
 
 // ---------------------------------------------------------------- navegação
 function route() {

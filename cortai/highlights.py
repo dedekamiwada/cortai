@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import subprocess
 from pathlib import Path
 
@@ -75,7 +76,9 @@ def scan_prompt(sheets: list[tuple[Path, float, float]], events: list[dict], cou
     parts += [f"- {p.name}: de {a:.0f}s a {b:.0f}s" for p, a, b in sheets]
     peaks = [signals.describe(e) for e in events
              if e["kind"] in (*signals.LOUD_KINDS, "gol_nosso", "gol_deles", "inicio", "fim_do_tempo", "reacao")]
-    parts += ["", "Eventos (gols lidos no placar, reações e picos do som):", "\n".join(peaks[:250]) or "(nenhum)"]
+    used = [e for e in events if e["kind"] in (*signals.LOUD_KINDS, "gol_nosso", "gol_deles", "inicio", "fim_do_tempo", "reacao")]
+    parts += ["", "Eventos (gols lidos no placar, reações e picos do som):", signals.legend(used[:250]),
+              "\n".join(peaks[:250]) or "(nenhum)"]
     parts.append('\nResponda somente com JSON {"clips": [{"title", "start", "end", "peak", "hook", "reason", "score", "hashtags"}]}.')
     return "\n".join(parts)
 
@@ -227,8 +230,9 @@ REVIEW_SCHEMA = {
 }
 
 
-def review_prompt(candidates, windows, images, transcript_text_for, extra: str, serie: str = "") -> str:
-    parts = []
+def review_prompt(candidates, windows, images, transcript_text_for, extra: str, serie: str = "",
+                  legend: str = "") -> str:
+    parts = [legend + "\n"] if legend else []
     if extra:
         parts.append(f"Pedido do streamer (prioridade máxima): {extra}\n")
     if serie:
@@ -332,11 +336,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return head + "\n".join(lines) + "\n"
 
 
-def horizontal_segment(src: Path, meta: dict, start: float, end: float, out: Path, voice: bool) -> Path:
-    """Trecho 1920x1080 (o vídeo inteiro, com barras desfocadas se não for 16:9) com a voz tratada."""
+def horizontal_segment(src: Path, meta: dict, start: float, end: float, out: Path, voice: bool,
+                       ass: str = "") -> Path:
+    """Trecho 1920x1080 (o vídeo inteiro, com barras desfocadas se não for 16:9) com a voz tratada e, se vier
+    `ass`, a legenda da fala gravada."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    subs = ""
+    if ass:
+        (out.parent / f"{out.stem}.ass").write_text(ass, encoding="utf-8")
+        subs = f",subtitles={out.stem}.ass"
     vf = ("split=2[a][b];[a]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,gblur=sigma=30,"
           "eq=brightness=-0.08[bg];[b]scale=1920:1080:force_original_aspect_ratio=decrease[fg];"
-          "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1")
+          f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1{subs}")
     base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{end - start:.3f}",
             "-filter_complex", f"[0:v]{vf}[v]", "-map", "[v]"]
     audio = []
@@ -423,15 +434,31 @@ def _srt_time(t: float) -> str:
     return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
 
 
-def srt_from_script(text: str, total: float) -> str:
-    """O .srt a partir do roteiro (editado ou não): cada linha "[  12.3s] fala" vira uma legenda até a próxima."""
-    import re
+def hms(t: float) -> str:
+    """HH:MM:SS.d, o formato de tempo da interface."""
+    t = round(max(0.0, t), 1)
+    h, m = int(t // 3600), int(t % 3600 // 60)
+    return f"{h:02d}:{m:02d}:{t - h * 3600 - m * 60:04.1f}"
 
-    lines = []
-    for raw in text.splitlines():
-        m = re.match(r"\s*\[\s*(\d+(?:[.,]\d+)?)s\]\s*(.+?)\s*(?:⚠.*)?$", raw)
-        if m:
-            lines.append((float(m.group(1).replace(",", ".")), m.group(2).strip()))
+
+SCRIPT_LINE = re.compile(r"\s*\[\s*(?:(\d+):)?(?:(\d+):)?(\d+(?:[.,]\d+)?)s?\]\s*(.+?)\s*(?:⚠.*)?$")
+
+
+def script_time(raw: str) -> tuple[float, str] | None:
+    """Linha do roteiro "[00:00:12.3] fala" (ou o formato antigo "[  12.3s] fala") → (segundos, fala)."""
+    m = SCRIPT_LINE.match(raw)
+    if not m:
+        return None
+    parts = [int(p) for p in m.groups()[:2] if p is not None]  # [min] ou [hora, min]
+    sec = float(m.group(3).replace(",", "."))
+    for mult, p in zip((60, 3600), reversed(parts)):
+        sec += p * mult
+    return sec, m.group(4).strip()
+
+
+def srt_from_script(text: str, total: float) -> str:
+    """O .srt a partir do roteiro (editado ou não): cada linha "[00:00:12.3] fala" vira uma legenda até a próxima."""
+    lines = [x for x in (script_time(raw) for raw in text.splitlines()) if x]
     lines.sort(key=lambda x: x[0])
     out = []
     for i, (t, txt) in enumerate(lines):
@@ -466,7 +493,7 @@ def script(lances: list[dict], starts: list[float], durations: list[float], tota
         nxt = lines[i + 1][0] if i + 1 < len(lines) else total
         need = max(1.2, len(text.split()) / WORDS_PER_SECOND)
         timed.append((t, min(nxt, t + need), text, k, need > nxt - t + 0.05))
-    head = [f"ROTEIRO DE NARRAÇÃO — {version}", f"Vídeo: {titulo}" if titulo else "", f"Duração: {total:.1f} s", "",
+    head = [f"ROTEIRO DE NARRAÇÃO — {version}", f"Vídeo: {titulo}" if titulo else "", f"Duração: {hms(total)}", "",
             "Como gravar: narre o vídeo inteiro, como personagem. Fale os nomes dos lances como bordão, diga o placar",
             "a cada gol e deixe a sua reação/o som do gol respirar. No CapCut: grave a narração, abaixe o áudio do",
             "jogo para ~30% e gere a legenda automática (1–3 palavras, destaque em amarelo).", ""]
@@ -482,13 +509,13 @@ def script(lances: list[dict], starts: list[float], durations: list[float], tota
         else:
             lance = lances[k - 1]
             # lances do job guardam o rótulo em `title` (é o título do clipe no editor)
-            body.append(f"\n#{k} {lance.get('title', '')}  ({starts[k - 1]:.1f}s → {starts[k - 1] + durations[k - 1]:.1f}s)")
+            body.append(f"\n#{k} {lance.get('title', '')}  ({hms(starts[k - 1])} → {hms(starts[k - 1] + durations[k - 1])})")
             if lance.get("visual"):
                 body.append(f"   na tela: {lance['visual']}")
             if not by_lance.get(k):
                 body.append("   (sem fala sugerida: narre o lance ou deixe o som do jogo respirar)")
         for t, e, text, _, tight in by_lance.get(k, []):
-            body.append(f"   [{t:5.1f}s] {text}" + ("   ⚠ fala longa para o espaço: fale rápido ou corte" if tight else ""))
+            body.append(f"   [{hms(t)}] {text}" + ("   ⚠ fala longa para o espaço: fale rápido ou corte" if tight else ""))
     txt = "\n".join(x for x in head if x is not None) + "\n".join(body) + "\n"
     srt = "\n".join(f"{i}\n{_srt_time(t)} --> {_srt_time(e)}\n{text}\n" for i, (t, e, text, _, _) in enumerate(timed, 1))
     return txt, srt

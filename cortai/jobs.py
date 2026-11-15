@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import capa, captions, edit, frames, hud, media, paths, picker, reframe, render, signals, styles, titles, to_studio, transcribe
+from . import capa, captions, edit, frames, hud, media, paths, picker, proc, reframe, regras, render, signals, styles, titles, to_studio, transcribe
 
 JOBS_DIR = paths.JOBS_DIR
 picker.USAGE_FILE = JOBS_DIR / "_uso" / "uso.csv"  # consumo de tokens por chamada (otimização com números)
@@ -90,7 +90,13 @@ def save_defaults(values: dict) -> dict:
 
 _jobs: dict[str, dict] = {}
 _lock = threading.RLock()
-_worker = ThreadPoolExecutor(max_workers=1)  # um job por vez: GPU e ffmpeg já paralelizam por dentro
+_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cortai-job")  # um job por vez: GPU e ffmpeg já paralelizam
+BUSY = ("queued", "downloading", "transcribing", "hud", "selecting", "reviewing", "titling", "rendering", "mapping")
+_cancel: set[str] = set()  # projetos com Cancelar pedido; o worker para no próximo update()
+
+
+class Cancelled(Exception):
+    """O usuário cancelou: interrompe a tarefa no próximo aviso de progresso."""
 
 
 # ------------------------------------------------------------------ persistência
@@ -106,8 +112,20 @@ def _save(job: dict) -> None:
 
 
 def update(job_id: str, **fields) -> dict:
+    if job_id in _cancel and threading.current_thread().name.startswith("cortai-job"):
+        raise Cancelled()  # todo passo longo avisa progresso por aqui: é onde a tarefa para
     with _lock:
         job = _jobs[job_id]
+        new = fields.get("status")
+        if new and new != job.get("status"):  # início de cada etapa da execução atual (o monitor mostra a duração)
+            if new in BUSY and job.get("status") not in BUSY:
+                job["etapas"] = {}
+            job.setdefault("etapas", {})[new] = round(time.time())
+        msg = fields.get("message")
+        if msg and msg != job.get("message"):  # atividade: o que foi feito e quando (as últimas 40)
+            log = job.setdefault("log", [])
+            log.append([round(time.time()), fields.get("status", job.get("status")), msg])
+            del log[:-40]
         job.update(fields)
         job["updated"] = time.time()
         _save(job)
@@ -120,7 +138,7 @@ def load_existing() -> None:
             job = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if job.get("status") not in ("done", "error", "waiting_manual", "waiting_match"):
+        if job.get("status") not in ("done", "error", "cancelled", "waiting_manual", "waiting_match"):
             job["status"], job["error"] = "error", "servidor reiniciado durante o processamento"
         for clip in job.get("clips", []):
             if clip.get("status") in ("rendering", "pending"):
@@ -208,11 +226,71 @@ def create(name: str, opts: dict, url: str | None = None, local_path: str | None
 
 
 def _guard(job_id: str, fn, *args) -> None:
+    picker.set_usage_job(job_id)  # o registro de tokens sabe de qual projeto é cada chamada
+    proc.set_job(job_id)          # e o Cancelar sabe quais processos encerrar
     try:
+        if job_id in _cancel:
+            raise Cancelled()
         fn(job_id, *args)
     except Exception as exc:
-        traceback.print_exc()
-        update(job_id, status="error", error=str(exc), message="Erro")
+        if job_id in _cancel or isinstance(exc, Cancelled):
+            _cancel.discard(job_id)
+            with _lock:
+                for c in _jobs[job_id]["clips"]:
+                    if c.get("status") in ("pending", "rendering"):
+                        c["status"] = "cancelled"
+            update(job_id, status="cancelled", error=None, message="Cancelado")
+        else:
+            traceback.print_exc()
+            update(job_id, status="error", error=str(exc), message="Erro")
+    finally:
+        _cancel.discard(job_id)
+        picker.set_usage_job(None)
+        proc.set_job(None)
+        proc.forget(job_id)
+
+
+def cancel(job_id: str) -> None:
+    """Para o que estiver rodando no projeto: encerra ffmpeg/yt-dlp/Claude e marca como Cancelado."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    if job["status"] not in BUSY:
+        raise ValueError("não há nada em andamento neste projeto")
+    _cancel.add(job_id)
+    if job["status"] == "queued":  # ainda não começou: o worker pula quando chegar a vez
+        update(job_id, status="cancelled", message="Cancelado")
+    proc.kill_job(job_id)
+
+
+def resume(job_id: str) -> None:
+    """Retoma um projeto cancelado ou com erro reaproveitando o que já ficou pronto (transcrição, placar, clipes)."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    if job["status"] not in ("cancelled", "error"):
+        raise ValueError("o projeto não está parado")
+    _cancel.discard(job_id)
+    if job["clips"] and _is_recap(job):
+        update(job_id, status="rendering", progress=0.0, error=None, message="Retomando a montagem…")
+        _worker.submit(_guard, job_id, _apply_pending)
+    elif job["clips"]:
+        update(job_id, status="rendering", progress=0.0, error=None, message="Retomando a renderização…")
+        _worker.submit(_guard, job_id, _render_missing)
+    else:
+        update(job_id, status="queued", progress=0.0, error=None, message="Na fila")
+        _worker.submit(_guard, job_id, _run_pipeline)
+
+
+def _render_missing(job_id: str) -> None:
+    job = get(job_id)
+    todo = [i for i, c in enumerate(job["clips"]) if c.get("status") != "done"]
+    words = _words(job_id)
+    for k, idx in enumerate(todo, 1):
+        update(job_id, message=f"Renderizando clipe {k} de {len(todo)}…", progress=(k - 1) / len(todo))
+        _render_one(job_id, idx, words)
+    failed = sum(c["status"] == "error" for c in get(job_id)["clips"])
+    update(job_id, status="done", progress=1.0, message="Clipes prontos" + (f", {failed} com erro" if failed else ""))
 
 
 # ------------------------------------------------------------------ pipeline
@@ -295,7 +373,7 @@ def _game_events(job_id: str, backend: str) -> list[dict]:
     if job["options"].get("content_type") != "game" or backend == "manual":
         return []
     path = Path(src["path"])
-    update(job_id, status="reviewing", progress=0.0, message="Procurando o placar do jogo na tela…")
+    update(job_id, status="hud", progress=0.0, message="Procurando o placar do jogo na tela…")
     dur = src["duration"]
     calib = hud.calibrate(backend, path, src, [dur * f for f in (0.3, 0.5, 0.7, 0.85)], d / "hud")
     if not calib:
@@ -524,7 +602,7 @@ def _run_highlights(job_id: str) -> None:
 
     def context(a: float, b: float) -> str:
         if transcript["segments"]:
-            return picker.format_transcript(transcript, events, a, b)
+            return picker.format_transcript(transcript, events, a, b, legend=False)
         return "\n".join(signals.describe(e) for e in events
                          if a <= e["t"] <= b and (e["kind"] in signals.LOUD_KINDS or e["kind"] in GAME_KINDS))
 
@@ -532,7 +610,8 @@ def _run_highlights(job_id: str) -> None:
     serie = (opts.get("serie") or "").strip()
     serie_txt = serie.replace("{n}", str(int(opts.get("serie_n") or 1))) if serie else ""
     raw = picker.ask(backend, highlights.REVIEW_SYSTEM,
-                     highlights.review_prompt(candidates, windows, [p.name for p in images], context, extra, serie_txt),
+                     highlights.review_prompt(candidates, windows, [p.name for p in images], context, extra, serie_txt,
+                                              legend=signals.legend(events)),
                      highlights.REVIEW_SCHEMA, images, step="resumo_revisao")
     (d / "highlight-review.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     plan = highlights.normalize(raw, candidates, src["duration"])
@@ -583,6 +662,12 @@ def _reserve_episode(serie: str, n: int | None) -> int:
 REDO_MARGIN = 20.0  # s de folga em volta do corte que o Claude pode usar para reposicionar
 
 
+def hms(t: float) -> str:
+    """Tempo no formato universal HH:MM:SS (o mesmo da interface)."""
+    t = max(0, int(t))
+    return f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}"
+
+
 def redo_clip(job_id: str, n: int, instruction: str) -> None:
     job = get(job_id)
     if not job:
@@ -591,16 +676,30 @@ def redo_clip(job_id: str, n: int, instruction: str) -> None:
     if not instruction:
         raise ValueError("escreva o que mudar (ex.: começa 3 s antes, termina na risada)")
     idx = _clip_index(job, n)
-    if job["clips"][idx]["status"] in ("pending", "rendering"):
+    clip = job["clips"][idx]
+    if clip["status"] in ("pending", "rendering"):
         raise ValueError("espere a renderização terminar")
+    quick = regras.time_edit(instruction, clip["start"], clip["end"])
+    if quick:  # "começa 3 s antes", "tira os últimos 2 s"…: código resolve, sem tokens
+        s0, e0 = max(0.0, quick[0]), min(job["source"]["duration"], quick[1])
+        recap = _is_recap(job)
+        _set_clip(job_id, idx, start=round(s0, 2), end=round(e0, 2), status="done" if recap else "pending", error=None,
+                  redo={"instrucao": instruction, "resposta": f"Ajustado direto (sem IA): {hms(s0)} → {hms(e0)}"})
+        if recap:
+            _stage(job_id, idx)
+        else:
+            _worker.submit(_render_one, job_id, idx, _words(job_id))
+        return
     backend = picker.resolve_backend(job.get("backend") or job["options"].get("backend", "auto"))
     if backend == "manual":
-        raise ValueError("refazer com instrução precisa do Claude Code logado ou de ANTHROPIC_API_KEY")
+        raise ValueError("esse pedido precisa do Claude (Claude Code logado ou ANTHROPIC_API_KEY); "
+                         "ajustes de tempo como \"começa 3 s antes\" funcionam sem ele")
     _set_clip(job_id, idx, status="pending", error=None, redo={"instrucao": instruction, "resposta": "Refazendo…"})
     _worker.submit(_redo_clip, job_id, idx, instruction, backend)
 
 
 def _redo_clip(job_id: str, idx: int, instruction: str, backend: str) -> None:
+    picker.set_usage_job(job_id)
     try:
         job = get(job_id)
         clip, src = job["clips"][idx], job["source"]
@@ -630,6 +729,10 @@ def _redo_clip(job_id: str, idx: int, instruction: str, backend: str) -> None:
     except Exception as exc:
         traceback.print_exc()
         _set_clip(job_id, idx, status="error", error=f"não consegui refazer: {exc}")
+        return
+    if _is_recap(get(job_id)):
+        _set_clip(job_id, idx, status="done")
+        _stage(job_id, idx)
         return
     _render_one(job_id, idx, _words(job_id))
 
@@ -689,7 +792,7 @@ def timeline(job_id: str) -> dict:
 
 
 def save_script(job_id: str, key: str, text: str) -> dict:
-    """Roteiro editado à mão: regrava o .txt e refaz o .srt a partir das linhas "[  12.3s] fala" (sem render)."""
+    """Roteiro editado à mão: regrava o .txt e refaz o .srt a partir das linhas "[00:00:12.3] fala" (sem render)."""
     from . import highlights
 
     job = get(job_id)
@@ -700,7 +803,7 @@ def save_script(job_id: str, key: str, text: str) -> dict:
     total = float(v.get("duration") or 0)
     srt = highlights.srt_from_script(text, total)
     if not srt:
-        raise ValueError("nenhuma fala com tempo no formato [  12.3s] texto")
+        raise ValueError("nenhuma fala com tempo no formato [00:00:12.3] texto")
     (JOBS_DIR / v["roteiro"]).write_text(text, encoding="utf-8")
     (JOBS_DIR / v["srt"]).write_text(srt, encoding="utf-8")
     v["rev"] = int(v.get("rev", 0)) + 1
@@ -724,15 +827,41 @@ def _missing_goals(events: list[dict], candidates: list, start: float, end: floa
     return out
 
 
+def _is_recap(job: dict | None) -> bool:
+    return bool(job) and job["options"].get("mode") == "highlights"
+
+
+def _stage(job_id: str, idx: int | None = None) -> None:
+    """Resumo: guarda a mudança sem renderizar. O lance fica "alterado" e o resumo "com mudanças pendentes";
+    o botão Remontar vídeos aplica tudo de uma vez (antes cada ajuste remontava os dois vídeos)."""
+    with _lock:
+        j = _jobs[job_id]
+        if idx is not None:
+            j["clips"][idx]["dirty"] = True
+        j["highlight"] = {**(j.get("highlight") or {}), "pendente": True}
+        _save(j)
+
+
 def compile_highlights(job_id: str) -> None:
-    """Remonta os dois vídeos (depois de editar um lance, por exemplo)."""
+    """Aplica as mudanças pendentes: renderiza só os lances alterados e monta os dois vídeos uma vez."""
     job = get(job_id)
-    if not job or job["options"].get("mode") != "highlights" or not job["clips"]:
+    if not _is_recap(job) or not job["clips"]:
         raise ValueError("este projeto não é de melhores momentos")
     if job["status"] not in ("done", "error"):
         raise ValueError("espere o processamento terminar")
-    update(job_id, status="rendering", progress=0.5, error=None, message="Remontando os vídeos…")
-    _worker.submit(_guard, job_id, _compile_highlights)
+    update(job_id, status="rendering", progress=0.0, error=None, message="Remontando os vídeos…")
+    _worker.submit(_guard, job_id, _apply_pending)
+
+
+def _apply_pending(job_id: str) -> None:
+    job = get(job_id)
+    idxs = [i for i, c in enumerate(job["clips"]) if c.get("dirty") or c.get("status") in ("staged", "pending")]
+    words = _words(job_id) if idxs else []
+    for k, idx in enumerate(idxs, 1):
+        update(job_id, message=f"Renderizando o lance alterado {k} de {len(idxs)}…", progress=0.6 * (k - 1) / len(idxs))
+        _render_one(job_id, idx, words)
+        _set_clip(job_id, idx, dirty=False)
+    _compile_highlights(job_id)
 
 
 def _compile_highlights(job_id: str) -> None:
@@ -749,6 +878,7 @@ def _compile_highlights(job_id: str) -> None:
         raise RuntimeError("nenhum lance renderizado")
 
     short = [c for c in done if c.get("no_short")] or done
+    words = _words(job_id) if hl.get("legenda_horizontal") else []
     update(job_id, status="rendering", message="Montando o short vertical…", progress=0.6)
     vsegs = [plain_clip(c["file"]) for c in short]
     card = f"VS {hl['adversario']}" if hl.get("adversario") else ""  # card do adversário na abertura
@@ -759,8 +889,12 @@ def _compile_highlights(job_id: str) -> None:
         update(job_id, message=f"Renderizando o lance {k} de {len(done)} (horizontal)…",
                progress=0.7 + 0.2 * (k - 1) / len(done))
         out = out_dir / "h" / f"{c['n']:02d}.mp4"
+        ass = ""
+        if hl.get("legenda_horizontal") and words:
+            lo = {**opts, **c.get("overrides", {}), "title_overlay": False, "landscape": True, "captions": True}
+            ass = captions.build_ass(words, c["start"], c["end"], lo)
         highlights.horizontal_segment(Path(src["path"]), src, c["start"], c["end"], out,
-                                      opts.get("voice_enhance", True))
+                                      opts.get("voice_enhance", True), ass)
         hsegs.append(out)
     update(job_id, message="Montando a versão horizontal…", progress=0.92)
     hstarts = highlights.compile_video(hsegs, [], card, out_dir / "horizontal.mp4", 1920, 1080, fps)
@@ -779,9 +913,9 @@ def _compile_highlights(job_id: str) -> None:
                    "srt": f"{job_id}/highlights/{name}-roteiro.srt",
                    "rev": int((hl.get(key) or {}).get("rev", 0)) + 1}
     shutil.rmtree(out_dir / "h", ignore_errors=True)
+    hl.pop("pendente", None)
     update(job_id, highlight=hl, status="done", progress=1.0,
-           message=f"Short de {hl['vertical']['duration']:.0f}s e horizontal de "
-                   f"{hl['horizontal']['duration'] / 60:.1f} min prontos")
+           message=f"Short ({hms(hl['vertical']['duration'])}) e horizontal ({hms(hl['horizontal']['duration'])}) prontos")
 
 def _visual_review(job_id: str, backend: str, candidates, transcript, events, style) -> list[dict]:
     job = get(job_id)
@@ -1142,6 +1276,8 @@ def _edit_plan(job_id: str, clip: dict, opts: dict, words: list[dict]) -> tuple[
 
 def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     job = get(job_id)
+    if job["status"] == "cancelled":  # renderização que estava na fila de um projeto cancelado
+        return
     clip = job["clips"][idx]
     _set_clip(job_id, idx, status="rendering", error=None)
     out_dir = _dir(job_id) / "clips" / f"{clip['n']:02d}"
@@ -1410,7 +1546,9 @@ def rerender(job_id: str, n: int, changes: dict) -> None:
         raise ValueError("word_fixes precisa ser um objeto {segundo: texto}")
     if "word_adds" in overrides:
         overrides["word_adds"] = _clean_adds(overrides["word_adds"])
-    fields = {"start": round(start, 2), "end": round(end, 2), "overrides": overrides, "status": "pending"}
+    recap = _is_recap(job)
+    fields = {"start": round(start, 2), "end": round(end, 2), "overrides": overrides,
+              "status": clip["status"] if recap else "pending"}
     if "title" in changes:
         fields["title"] = str(changes["title"]).strip()[:200]
         if fields["title"] != clip["title"]:
@@ -1418,6 +1556,9 @@ def rerender(job_id: str, n: int, changes: dict) -> None:
     _set_clip(job_id, idx, **fields)
     if "title_formula" in fields:
         titles.record(JOBS_DIR, job_id, [{**clip, **fields}])
+    if recap:
+        _stage(job_id, idx)
+        return
     _worker.submit(_render_one, job_id, idx, _words(job_id))
 
 
@@ -1444,6 +1585,20 @@ def apply_all(job_id: str, changes: dict) -> int:
     style = {k: v for k, v in changes.items() if k in STYLE_KEYS}
     if not style:
         raise ValueError("nada para aplicar")
+    if job["options"].get("mode") == "highlights":
+        if job["status"] not in ("done", "error"):
+            raise ValueError("espere o processamento terminar")
+        changed = []
+        with _lock:
+            for i, c in enumerate(_jobs[job_id]["clips"]):
+                new = {**c.get("overrides", {}), **style}
+                if new != c.get("overrides", {}):
+                    c["overrides"] = new
+                    changed.append(i)
+            _save(_jobs[job_id])
+        for i in changed:
+            _stage(job_id, i)
+        return len(changed)
     words = _words(job_id)
     with _lock:
         for clip in _jobs[job_id]["clips"]:
@@ -1476,13 +1631,18 @@ def create_clip(job_id: str, start: float, end: float, title: str = "", extra: d
         "hashtags": [], "peak": None, "reactions": [], "keywords": [], "post": "",
     }
     clip.update({k: v for k, v in (extra or {}).items() if k in ("peak", "reason", "visual", "score", "candidate")})
-    if job["options"].get("mode") == "highlights":
-        clip.update({"no_short": True, "tipo": "jogada", "narracao": [], "overrides": {"title_overlay": False}})
+    recap = _is_recap(job)
+    if recap:
+        clip.update({"no_short": True, "tipo": "jogada", "narracao": [], "overrides": {"title_overlay": False},
+                     "status": "staged"})
     with _lock:
         _jobs[job_id]["clips"].append(clip)
+        idx = len(_jobs[job_id]["clips"]) - 1
         _save(_jobs[job_id])
-    if render:
-        _worker.submit(_render_one, job_id, len(job["clips"]), words)
+    if recap:
+        _stage(job_id, idx)
+    elif render:
+        _worker.submit(_render_one, job_id, idx, words)
     return clip
 
 
@@ -1584,24 +1744,18 @@ def _edit_recap(job_id: str, instruction: str, backend: str) -> None:
             s0, e0 = max(start, float(op["start"])), min(end, float(op["end"]))
             if e0 - s0 >= 2:
                 idx = _clip_index(get(job_id), n)
-                _set_clip(job_id, idx, start=round(s0, 2), end=round(e0, 2), status="pending")
-                to_render.append(idx)
+                _set_clip(job_id, idx, start=round(s0, 2), end=round(e0, 2), dirty=True)
         elif a == "adicionar" and op.get("start") is not None and op.get("end") is not None:
             s0, e0 = max(start, float(op["start"])), min(end, float(op["end"]))
             if e0 - s0 >= 2:
-                c = create_clip(job_id, s0, e0, (op.get("titulo") or "").strip()[:60], render=False)
-                to_render.append(_clip_index(get(job_id), c["n"]))
+                create_clip(job_id, s0, e0, (op.get("titulo") or "").strip()[:60], render=False)
                 added += 1
-    # renderiza ANTES de remover: remover muda as posições na lista e o índice apontaria para outro lance
-    for idx in sorted(set(to_render)):
-        update(job_id, message="Renderizando os lances mudados…")
-        _render_one(job_id, idx, words)
     for n in removed:
         delete_clip(job_id, n)
     hl = dict(get(job_id).get("highlight") or {})
     hl["pedido"] = {"instrucao": instruction, "resposta": (raw.get("resposta") or "").strip()}
     update(job_id, highlight=hl)
-    _compile_highlights(job_id)
+    _apply_pending(job_id)  # o que mudou agora e o que já estava pendente, num render só
 
 
 def match_preview(job_id: str) -> dict:
@@ -1624,6 +1778,78 @@ def match_preview(job_id: str) -> dict:
                         if start <= e["t"] <= end and e.get("tipo") in ("gol_nosso", "gol_deles", "fim_do_tempo")]}
 
 
+def recap_captions(job_id: str) -> dict:
+    """As legendas da fala de todos os lances do resumo, frase a frase, como aparecem no vídeo. Cada frase
+    leva as chaves das palavras originais (início com 2 casas) para a correção voltar ao lance certo."""
+    job = get(job_id)
+    if not job or job["options"].get("mode") != "highlights":
+        raise ValueError("isso vale para o resumo da partida")
+    words = _words(job_id)
+    opts, hl = job["options"], job.get("highlight") or {}
+    lances = []
+    for c in sorted((c for c in job["clips"] if c.get("status") in ("done", "staged")), key=lambda c: c["start"]):
+        o = {**opts, **c.get("overrides", {})}
+        preset = captions.PRESETS.get(o.get("caption_preset") or "destaque", captions.PRESETS["destaque"])
+        tagged = [{**w, "k": f"{w['s']:.2f}"} for w in words if w["e"] > c["start"] and w["s"] < c["end"]]
+        shown = captions.apply_fixes(tagged, o.get("word_fixes"), o.get("word_adds"))
+        shown = [w for w in shown if w["e"] > c["start"] and w["s"] < c["end"]]
+        lines = [{"keys": [w["k"] for w in ch if "k" in w], "text": " ".join(w["w"] for w in ch),
+                  "t": round(max(0.0, ch[0]["s"] - c["start"]), 1), "manual": any("k" not in w for w in ch)}
+                 for ch in captions._chunks(shown, preset["max_words"], preset["max_chars"])]
+        lances.append({"n": c["n"], "title": c["title"], "no_short": bool(c.get("no_short")), "lines": lines})
+    return {"tem_fala": bool(words), "horizontal": bool(hl.get("legenda_horizontal")), "lances": lances}
+
+
+def _line_fixes(keys: list[str], text: str) -> dict[str, str]:
+    """Frase editada → correções por palavra. Mesmo número de palavras: uma a uma (o destaque palavra a palavra
+    continua); número diferente: a frase inteira fica na 1ª palavra e as outras somem."""
+    tokens = text.split()
+    if len(tokens) == len(keys):
+        return dict(zip(keys, tokens))
+    return {k: (" ".join(tokens) if i == 0 else "") for i, k in enumerate(keys)}
+
+
+def save_recap_captions(job_id: str, body: dict) -> int:
+    """Corrige o texto das legendas, renderiza só os lances que mudaram e remonta os vídeos."""
+    job = get(job_id)
+    if not job or job["options"].get("mode") != "highlights" or not job["clips"]:
+        raise ValueError("isso vale para o resumo da partida")
+    if job["status"] not in ("done", "error"):
+        raise ValueError("espere o processamento terminar")
+    fixes: dict[int, dict[str, str]] = {}
+    for line in body.get("linhas") or []:
+        try:
+            n, keys, text = int(line["n"]), [f"{float(k):.2f}" for k in line["keys"]], str(line.get("text") or "")
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("cada linha precisa de n, keys e text") from None
+        if keys:
+            fixes.setdefault(n, {}).update(_line_fixes(keys, text[:200]))
+    changed = []
+    with _lock:
+        j = _jobs[job_id]
+        for idx, c in enumerate(j["clips"]):
+            if c.get("status") not in ("done", "staged"):
+                continue
+            old = c.get("overrides", {})
+            new = dict(old)
+            if fixes.get(c["n"]):
+                new["word_fixes"] = {**(old.get("word_fixes") or {}), **fixes[c["n"]]}
+            if new != old:
+                c["overrides"] = new
+                changed.append(idx)
+        hl = dict(j.get("highlight") or {})
+        horizontal = bool(body.get("horizontal", hl.get("legenda_horizontal")))
+        toggled = horizontal != bool(hl.get("legenda_horizontal"))
+        hl["legenda_horizontal"] = horizontal
+        j["highlight"] = hl
+        _save(j)
+    for idx in changed:
+        _stage(job_id, idx)
+    if toggled and not changed:
+        _stage(job_id)
+    return len(changed)
+
+
 def set_lance(job_id: str, n: int, no_short: bool) -> None:
     """Resumo da partida: o lance entra ou não no short (o horizontal usa todos). Vale ao remontar os vídeos."""
     with _lock:
@@ -1632,6 +1858,7 @@ def set_lance(job_id: str, n: int, no_short: bool) -> None:
             raise KeyError(job_id)
         job["clips"][_clip_index(job, n)]["no_short"] = bool(no_short)
         _save(job)
+    _stage(job_id)
 
 
 FEEDBACK_REASONS = {
@@ -1687,6 +1914,8 @@ def delete_clip(job_id: str, n: int) -> None:
         job["clips"].pop(idx)
         _save(job)
     shutil.rmtree(_dir(job_id) / "clips" / f"{n:02d}", ignore_errors=True)
+    if _is_recap(job):
+        _stage(job_id)
 
 
 def export_zip(job_id: str) -> Path:

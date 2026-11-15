@@ -7,17 +7,19 @@ const STAGES = {
   queued: "Na fila",
   downloading: "Baixando",
   transcribing: "Transcrevendo",
-  selecting: "Claude escolhendo candidatos",
-  reviewing: "Claude assistindo aos candidatos",
-  titling: "Claude escrevendo títulos",
-  waiting_manual: "Esperando sua resposta do Claude",
-  mapping: "Claude separando as partidas",
+  hud: "Lendo o placar",
+  selecting: "Escolhendo momentos",
+  reviewing: "Conferindo os candidatos",
+  titling: "Escrevendo títulos",
+  waiting_manual: "Esperando a resposta colada",
+  mapping: "Separando as partidas",
   waiting_match: "Escolha a partida",
   rendering: "Renderizando",
   done: "Pronto",
   error: "Erro",
+  cancelled: "Cancelado",
 };
-const BUSY = new Set(["queued", "downloading", "transcribing", "selecting", "reviewing", "titling", "rendering", "mapping"]);
+const BUSY = new Set(["queued", "downloading", "transcribing", "hud", "selecting", "reviewing", "titling", "rendering", "mapping"]);
 const LAYOUTS = { face: "seguindo rosto", fit: "vídeo inteiro", split: "tela dividida", manual: "posição fixa" };
 const SCORE_NAMES = { hook: "Gancho", flow: "Ritmo", value: "Graça", trend: "Compartilhável" };
 // mesmos limites de agrupamento de captions.py, para a prévia do editor
@@ -41,18 +43,6 @@ async function api(path, opts = {}) {
 const postJSON = (path, body) => api(path, {
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
 });
-
-const fmtTime = (s, decimals = false) => {
-  s = Math.max(0, s);
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-  const sec = decimals ? (s % 60).toFixed(1).padStart(4, "0") : String(Math.floor(s % 60)).padStart(2, "0");
-  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
-};
-const parseTime = (v) => {
-  v = (v || "").trim();
-  if (!v) return 0;
-  return v.split(":").reduce((acc, part) => acc * 60 + (parseFloat(part) || 0), 0);
-};
 
 // ---------------------------------------------------------------- navegação
 function route() {
@@ -97,7 +87,7 @@ function fillFields(root, values) {
     const el = root.querySelector(`[name="${k}"]`);
     if (!el || k === "style_id") continue;
     if (el.type === "checkbox") el.checked = !!v;
-    else if (["range_start", "range_end"].includes(k)) el.value = v ? fmtTime(v) : "";
+    else if (["range_start", "range_end"].includes(k)) el.value = v ? fmtTime(v) : "";  // HH:MM:SS
     else el.value = v;
   }
 }
@@ -222,13 +212,15 @@ $("#job-form").addEventListener("submit", async (e) => {
   const f = e.target;
   const err = $("#form-error");
   err.textContent = "";
+  const rs = parseTime(f.range_start.value), re_ = parseTime(f.range_end.value);
+  if (isNaN(rs) || isNaN(re_)) return (err.textContent = "Trecho da live: use HH:MM:SS (ex.: 01:20:00).");
   const options = {
     num_clips: +f.num_clips.value, min_len: +f.min_len.value, max_len: +f.max_len.value,
     instructions: f.instructions.value, content_type: f.content_type.value, style_id: f.style_id.value,
     visual_review: f.visual_review.checked, layout: f.layout.value,
     mode: f.mode.value, highlight_basis: f.highlight_basis.value,
     serie: f.serie.value.trim(), serie_n: f.serie_n.value ? +f.serie_n.value : null,
-    range_start: parseTime(f.range_start.value), range_end: parseTime(f.range_end.value),
+    range_start: rs, range_end: re_,
     language: f.language.value, backend: f.backend.value, whisper_model: f.whisper_model.value,
     voice_track: +f.voice_track.value, explore: f.explore.checked,
     ...readFields(f, STYLE_FIELDS), ...readFields(f, COVER_FIELDS),
@@ -326,19 +318,7 @@ async function openJob(id) {
 
 function renderJob(job) {
   $("#job-title").textContent = prettyName(job.name);
-  const st = $("#job-status");
-  const busy = BUSY.has(job.status);
-  const indeterminate = ["selecting", "downloading", "queued", "titling"].includes(job.status) ||
-    (job.status === "reviewing" && job.message.startsWith("Claude"));
-  st.innerHTML = `<div class="msg"></div>${busy ? `<div class="bar ${indeterminate ? "indeterminate" : ""}"><i></i></div>` : ""}
-    ${job.error ? `<div class="err"></div>` : ""}`;
-  const extra = job.backend ? ` · IA: ${{ cli: "Claude Code", api: "API Anthropic", manual: "manual" }[job.backend]}` : "";
-  const dur = job.source.duration ? ` · vídeo de ${fmtTime(job.source.duration)}` : "";
-  const stage = STAGES[job.status] || job.status;
-  const msg = job.message && job.message !== stage ? `${stage} — ${job.message}` : stage;
-  $(".msg", st).textContent = `${msg}${dur}${extra}`;
-  if (busy) $(".bar > i", st).style.width = `${Math.round((job.progress || 0) * 100)}%`;
-  if (job.error) $(".err", st).textContent = job.error;
+  renderMonitor(job);
 
   $("#manual").classList.toggle("hidden", job.status !== "waiting_manual");
   const ready = ["done", "error"].includes(job.status) && !!job.source.duration;
@@ -352,6 +332,83 @@ function renderJob(job) {
   renderTimeline(job);
   renderHighlight(job);
   renderClips(job);
+}
+
+// ---- monitor do projeto: etapas (como a fila de render de um editor), atividade, cancelar/retomar
+const STEPS = [["downloading", "Baixar"], ["transcribing", "Transcrever"], ["hud", "Placar"], ["mapping", "Partidas"],
+  ["selecting", "Escolher"], ["reviewing", "Conferir"], ["titling", "Títulos"], ["rendering", "Renderizar"]];
+let activityOpen = false;
+function stepTimes(job) {
+  // começo de cada etapa da execução atual (o servidor zera a cada execução nova, ex.: Remontar)
+  if (job.etapas) return job.etapas;
+  const first = {};
+  for (const [t, status] of job.log || []) if (!(status in first)) first[status] = t;
+  return first;
+}
+function plannedSteps(job) {
+  const o = job.options, seen = stepTimes(job), recap = o.mode === "highlights";
+  const expect = {
+    downloading: !!job.source.url, transcribing: !(recap && o.highlight_basis === "imagem"),
+    hud: o.content_type === "game", mapping: false, selecting: true,
+    reviewing: recap || o.visual_review !== false, titling: !recap, rendering: true,
+  };
+  return STEPS.filter(([k]) => k in seen || k === job.status || expect[k]);
+}
+function renderMonitor(job) {
+  const st = $("#job-status");
+  const busy = BUSY.has(job.status);
+  const stopped = ["cancelled", "error"].includes(job.status);
+  const steps = plannedSteps(job), times = stepTimes(job), now = Date.now() / 1000;
+  const cur = steps.findIndex(([k]) => k === job.status);
+  const lastSeen = Math.max(-1, ...steps.map(([k], i) => (k in times ? i : -1)));
+  const items = steps.map(([k, label], i) => {
+    const started = times[k];
+    const nextStart = steps.slice(i + 1).map(([n]) => times[n]).find((t) => t != null);
+    const finish = times.done ?? times.cancelled ?? times.error ?? job.updated;
+    const end = i === cur ? now : nextStart ?? (stopped || job.status === "done" ? finish : null);
+    const firstRun = steps.findIndex(([n]) => n in times);
+    const state = job.status === "done" || (firstRun > 0 && i < firstRun) ? "done" : i === cur ? "current" : started != null && i < lastSeen ? "done"
+      : stopped && i === lastSeen ? "failed" : started != null ? "done" : "todo";
+    const dur = started != null && end ? fmtDur(Math.max(0, end - started)) : "";
+    return `<li class="${state}"><b>${label}</b><span class="tc">${dur}</span></li>`;
+  }).join("");
+  const stage = STAGES[job.status] || job.status;
+  // tempo de processamento pela atividade (o projeto pode ter sido criado ontem e editado agora)
+  const marks = Object.values(times);
+  const t0 = marks.length ? Math.min(...marks) : busy ? job.created : null;
+  const endT = busy ? now : times.done ?? times.cancelled ?? times.error ?? (stopped ? job.updated : Math.max(...marks));
+  const total = t0 != null ? fmtTime(Math.max(0, endT - t0)) : "";
+  const indeterminate = ["selecting", "downloading", "queued", "titling", "mapping"].includes(job.status) ||
+    (job.status === "reviewing" && (job.message || "").startsWith("Claude"));
+  const action = busy ? `<button class="ghost danger small" id="job-cancel">Cancelar</button>`
+    : stopped ? `<button class="secondary small" id="job-resume">${job.status === "cancelled" ? "Retomar" : "Tentar de novo"}</button>` : "";
+  const log = (job.log || []).slice().reverse().map(([t, , m]) =>
+    `<li><span class="tc">${new Date(t * 1000).toLocaleTimeString("pt-BR")}</span>${escapeHtml(m)}</li>`).join("");
+  const ia = job.backend ? ` · IA: ${{ cli: "Claude Code", api: "API Anthropic", manual: "manual" }[job.backend]}` : "";
+  st.className = "status monitor";
+  st.dataset.state = job.status;  // atributo, não classe: "rendering"/"done" já são classes de outros componentes
+  st.innerHTML = `
+    <ol class="steps">${items}</ol>
+    <div class="monitor-line">
+      <span class="msg"></span>
+      ${total ? `<span class="muted small tc">${busy ? "rodando há " : stopped ? "parou depois de " : "levou "}${total}</span>` : ""}
+      ${action}
+    </div>
+    ${busy ? `<div class="bar ${indeterminate ? "indeterminate" : ""}"><i style="width:${Math.round((job.progress || 0) * 100)}%"></i></div>` : ""}
+    ${job.error ? `<div class="err"></div>` : ""}
+    <details class="activity"${activityOpen ? " open" : ""}><summary>Atividade${job.source.duration ? ` · vídeo de ${fmtTime(job.source.duration)}` : ""}${ia}</summary><ol>${log || "<li>sem registro</li>"}</ol></details>`;
+  $(".msg", st).textContent = !stopped && job.message && job.message !== stage ? `${stage}: ${job.message}` : stage;
+  if (job.error) $(".err", st).textContent = job.error;
+  $(".activity", st).ontoggle = (e) => (activityOpen = e.target.open);
+  const cancel = $("#job-cancel", st), resume = $("#job-resume", st);
+  if (cancel) cancel.onclick = async () => {
+    cancel.disabled = true;
+    try { await postJSON(`/api/jobs/${job.id}/cancelar`, {}); openJob(job.id); } catch (ex) { alert(ex.message); cancel.disabled = false; }
+  };
+  if (resume) resume.onclick = async () => {
+    resume.disabled = true;
+    try { await postJSON(`/api/jobs/${job.id}/retomar`, {}); openJob(job.id); } catch (ex) { alert(ex.message); resume.disabled = false; }
+  };
 }
 
 // ---- barra de ferramentas do projeto
@@ -396,9 +453,11 @@ $("#search-input").addEventListener("input", async (e) => {
 $("#apply-btn").onclick = async () => {
   $("#apply-error").textContent = "";
   const body = { ...readFields($("#apply-form"), STYLE_FIELDS), save_default: $("#apply-default").checked };
-  if (!confirm(`Aplicar este estilo e renderizar de novo os ${currentJob.clips.length} clipes?`)) return;
+  const recap = currentJob.options.mode === "highlights";  // no resumo só guarda; o Remontar aplica
+  if (!recap && !confirm(`Aplicar e renderizar de novo os ${currentJob.clips.length} clipes?`)) return;
   try {
-    await postJSON(`/api/jobs/${currentJob.id}/apply`, body);
+    const r = await postJSON(`/api/jobs/${currentJob.id}/apply`, body);
+    if (recap) $("#apply-error").textContent = r.clips ? `Guardado em ${r.clips} lance(s).` : "Nada mudou.";
     if (body.save_default) loadConfig();
     openJob(currentJob.id);
   } catch (ex) {
@@ -457,7 +516,7 @@ async function renderAlts(job) {
     sc.textContent = a.score;
     sc.className = `score ${a.score >= 75 ? "" : a.score >= 50 ? "mid" : "low"}`;
     $(".alt-title", row).textContent = a.title || "Momento sem título";
-    $(".alt-meta", row).textContent = `${fmtTime(a.start)} → ${fmtTime(a.end)} · ${Math.round(a.end - a.start)} s · ${a.situacao}`;
+    $(".alt-meta", row).textContent = `${fmtTime(a.start)} → ${fmtTime(a.end)} · ${fmtDur(a.end - a.start)} · ${a.situacao}`;
     $(".alt-why", row).textContent = a.visual || a.reason;
     $(".alt-use", row).onclick = async (e) => {
       e.currentTarget.disabled = true;
@@ -472,7 +531,7 @@ async function renderAlts(job) {
 }
 
 // ---- linha do tempo de eventos (placar + reações + cortes)
-let tlCache = { key: null, data: null };
+let tlCache = { key: null, data: null }, jobTl = null, tlMark = null;
 async function renderTimeline(job) {
   const card = $("#timeline");
   const ready = ["done", "error", "waiting_match"].includes(job.status) && job.options.mode !== "highlights";
@@ -480,65 +539,69 @@ async function renderTimeline(job) {
   const key = `${job.id}:${job.clips.map((c) => `${c.n}-${c.start}-${c.end}`).join(",")}`;
   if (tlCache.key !== key) {
     try { tlCache = { key, data: await api(`/api/jobs/${job.id}/timeline`) }; } catch { return; }
+    tlMark = null;  // cortes mudaram (ou outro projeto): o trecho marcado já virou corte ou não vale mais
   }
   const t = tlCache.data;
   const has = t.eventos.length || t.reacoes.length;
   card.classList.toggle("hidden", !has || !t.duration);
   if (!has || !t.duration) return;
-  const PX = 2.2;  // px por segundo: 1 h ≈ 8 mil px, rola na horizontal
-  const track = $("#tl-track");
-  track.style.width = `${Math.ceil(t.duration * PX)}px`;
-  const mk = (cls, x, w, title, data) => {
-    const el = document.createElement("button");
-    el.className = `tl-m ${cls}`;
-    el.style.left = `${x * PX}px`;
-    if (w) el.style.width = `${Math.max(3, w * PX)}px`;
-    el.title = title;
-    if (data) el.onclick = (e) => openTlPop(e, data);
-    return el;
-  };
-  const items = [];
-  for (let s = 0; s < t.duration; s += 600) {
-    const tick = document.createElement("span");
-    tick.className = "tl-tick"; tick.style.left = `${s * PX}px`; tick.textContent = fmtTime(s);
-    items.push(tick);
+  if (!jobTl) {
+    jobTl = new Timeline($("#tl-host"), {
+      onSeek: (at, ev) => openTlPop(ev, { t: at, title: "Ponto da live", sub: fmtTime(at) }),
+      onMark: (s, e, ev) => {
+        tlMark = { s, e };
+        renderTimeline(currentJob);
+        openTlPop(ev, { s, e, title: "Trecho marcado", sub: `${fmtTime(s)} → ${fmtTime(e)} · ${fmtDur(e - s)}` });
+      },
+      onMarker: (m, ev) => (m.pop ? openTlPop(ev, m.pop) : null),
+      onSelect: (n) => {
+        const list = $$("#clips .clip"), el = list.find((x) => x.dataset.key === String(n));
+        if (el) focusClip(list.indexOf(el));
+      },
+    });
   }
-  t.partidas.forEach((s) => items.push(mk("tl-match", s, 0, `Começo de partida ~${fmtTime(s)}`)));
-  t.cortes.forEach((c) => items.push(mk("tl-cut", c.start, c.end - c.start, `Corte ${c.n}: ${c.title}`)));
-  t.reacoes.forEach((r) => items.push(mk("tl-reacao", r.t, 0, `Reação forte (z=${r.z}) ${fmtTime(r.t)}`,
-    { t: r.t, title: "Reação forte", sub: `z=${r.z} · ${fmtTime(r.t)}` })));
-  t.eventos.forEach((e) => {
-    const nosso = e.tipo === "gol_nosso", deles = e.tipo === "gol_deles";
-    const title = nosso ? `Seu gol ${e.placar}` : deles ? `Gol sofrido ${e.placar}` : "Fim do tempo normal";
-    items.push(mk(nosso ? "tl-nosso" : deles ? "tl-deles" : "tl-fim", e.t, 0, `${title} · ${fmtTime(e.t)}`,
-      { t: e.t, title, sub: `${fmtTime(e.t)}${e.relogio ? ` · relógio ${e.relogio}` : ""}` }));
-  });
-  track.replaceChildren(...items);
+  const segments = t.cortes.map((c) => ({ id: c.n, s: c.start, e: c.end, cls: "cut", label: `${c.n}. ${c.title}` }));
+  const markers = [
+    ...t.partidas.map((s) => ({ t: s, cls: "match", title: "Começo de partida" })),
+    ...t.reacoes.map((r) => ({ t: r.t, cls: "reacao", title: `Reação forte (z=${r.z})`,
+      pop: { t: r.t, title: "Reação forte", sub: `z=${r.z} · ${fmtTime(r.t)}` } })),
+    ...t.eventos.map((e) => {
+      const nosso = e.tipo === "gol_nosso", deles = e.tipo === "gol_deles";
+      const title = nosso ? `Seu gol ${e.placar}` : deles ? `Gol sofrido ${e.placar}` : "Fim do tempo normal";
+      return { t: e.t, cls: nosso ? "nosso" : deles ? "deles" : "fim", title, label: nosso || deles ? e.placar : "",
+        pop: { t: e.t, title, sub: `${fmtTime(e.t)}${e.relogio ? ` · relógio ${e.relogio}` : ""}` } };
+    }),
+  ];
+  jobTl.set({ start: 0, end: t.duration, segments, markers, mark: tlMark });
 }
 let tlPopAt = null;
 function openTlPop(e, data) {
-  e.stopPropagation();
   tlPopAt = data;
   const pop = $("#tl-pop");
   $("#tl-pop-title").textContent = data.title;
   $("#tl-pop-sub").textContent = data.sub;
-  const card = $("#timeline").getBoundingClientRect();
-  const r = e.currentTarget.getBoundingClientRect();
-  pop.style.left = `${Math.min(card.width - 240, Math.max(8, r.left - card.left - 100))}px`;
+  $("#tl-pop-create").lastChild.textContent = data.s != null ? "Criar corte deste trecho" : "Criar corte aqui";
+  const card = $("#timeline").getBoundingClientRect(), host = $("#tl-host").getBoundingClientRect();
+  pop.style.left = `${Math.min(card.width - 240, Math.max(8, (e?.clientX ?? card.left) - card.left - 115))}px`;
   pop.classList.remove("hidden");
+  // acima da linha do tempo: por cima dela, o popover pegaria o próximo clique ou arrasto
+  pop.style.top = `${host.top - card.top - pop.offsetHeight - 6}px`;  // pode subir sobre o texto do cartão
 }
-document.addEventListener("click", (e) => { if (!e.target.closest("#tl-pop")) $("#tl-pop").classList.add("hidden"); });
+document.addEventListener("click", (e) => { if (!e.target.closest("#tl-pop, #tl-host")) $("#tl-pop").classList.add("hidden"); });
 $("#tl-pop-create").onclick = async (e) => {
   if (!tlPopAt) return;
-  e.currentTarget.disabled = true;
+  const btn = e.currentTarget;
+  btn.disabled = true;
   try {
-    // 10 s de contexto antes do lance e 8 s para a reação (mesmas bordas do motor de cortes)
-    const clip = await postJSON(`/api/jobs/${currentJob.id}/clips`, { start: tlPopAt.t - 10, end: tlPopAt.t + 8 });
+    // ponto/lance: 10 s de contexto antes e 8 s para a reação (as bordas do motor de cortes); trecho: o que você marcou
+    const body = tlPopAt.s != null ? { start: tlPopAt.s, end: tlPopAt.e } : { start: tlPopAt.t - 10, end: tlPopAt.t + 8 };
+    const clip = await postJSON(`/api/jobs/${currentJob.id}/clips`, body);
     $("#tl-pop").classList.add("hidden");
+    tlMark = null;
     await openJob(currentJob.id);
     openEditor(currentJob.id, clip.n);
   } catch (ex) { alert(ex.message); }
-  e.currentTarget.disabled = false;
+  btn.disabled = false;
 };
 
 // ---- partidas da live
@@ -555,7 +618,7 @@ function renderMatches(job) {
       <td><b class="res"></b> <span class="score-txt"></span><div class="what"></div></td><td class="muted small meta"></td>`;
     $("input", tr).checked = keep.has(m.n);
     $("input", tr).onchange = updateMatchCount;
-    $(".t", tr).textContent = `${fmtTime(m.inicio)} → ${fmtTime(m.fim)} · ${Math.round((m.fim - m.inicio) / 60)} min`;
+    $(".t", tr).textContent = `${fmtTime(m.inicio)} → ${fmtTime(m.fim)} · ${fmtDur(m.fim - m.inicio)}`;
     const [resText, resKind] = RESULT[m.resultado] || [m.resultado, ""];
     $(".res", tr).textContent = resText;
     $(".res", tr).className = `res chip ${resKind}`;
@@ -602,17 +665,71 @@ $("#map-btn").onclick = async () => {
 
 // ---- melhores momentos da partida
 const hlScripts = {};
+const HL_TAB_KEY = "cortai.hlTab";
+let hlTab = (() => { try { return localStorage.getItem(HL_TAB_KEY) || "videos"; } catch { return "videos"; } })();
+function showHlTab(tab) {
+  hlTab = tab;
+  try { localStorage.setItem(HL_TAB_KEY, tab); } catch { /* sem armazenamento: só não lembra a aba */ }
+  $$("#hl-tabs [data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
+  $$("#highlight .tab-page").forEach((p) => p.classList.toggle("hidden", p.dataset.tab !== tab));
+  if (tab === "legendas" && currentJob) loadRecapCaptions(currentJob, true);
+  if (tab === "estilo") fillRecapStyle();
+}
+$$("#hl-tabs [data-tab]").forEach((b) => (b.onclick = () => showHlTab(b.dataset.tab)));
+// a aba Estilo usa o mesmo formulário do "Estilo de todos" dos cortes (um formulário só, sem cópia)
+const applyHome = { parent: $("#apply-panel").parentNode, next: $("#apply-panel").nextSibling };
+function placeApplyPanel(recap) {
+  const panel = $("#apply-panel");
+  if (recap && panel.parentNode !== $("#hl-style-slot")) {
+    $("#hl-style-slot").appendChild(panel);
+    panel.classList.remove("hidden", "card", "panel");
+    $("#apply-title").textContent = "Estilo de todos os lances";
+    $("#apply-note").classList.remove("hidden");
+    $("#apply-btn").textContent = "Guardar estilo";
+  } else if (!recap && panel.parentNode === $("#hl-style-slot")) {
+    applyHome.parent.insertBefore(panel, applyHome.next);
+    panel.classList.add("hidden", "card", "panel");
+    $("#apply-title").textContent = "Aplicar o mesmo estilo a todos os clipes";
+    $("#apply-note").classList.add("hidden");
+    $("#apply-btn").textContent = "Aplicar e renderizar todos";
+  }
+  $('#job-tools [data-panel="apply-panel"]').classList.toggle("hidden", recap);
+}
+function fillRecapStyle() {
+  const lance = currentJob?.clips.find((c) => c.status === "done");
+  if (lance) fillFields($("#apply-form"), { ...currentJob.options, ...lance.overrides });
+}
+function recapPending(job) {
+  const changed = job.clips.filter((c) => c.dirty || c.status === "staged").length;
+  return { changed, any: changed > 0 || !!job.highlight?.pendente };
+}
 async function renderHighlight(job) {
   const panel = $("#highlight");
-  const hl = job.options.mode === "highlights" ? job.highlight : null;
+  const recap = job.options.mode === "highlights";
+  const hl = recap ? job.highlight : null;
+  placeApplyPanel(recap);
+  for (const id of ["reselect", "map-btn", "retitle-btn"]) {  // ferramentas de cortes soltos não valem no resumo
+    const el = id === "reselect" ? $('#job-tools [data-panel="reselect"]') : $(`#${id}`);
+    el?.classList.toggle("hidden", recap);
+  }
   panel.classList.toggle("hidden", !hl);
   if (!hl) return;
-  $("#hl-title").textContent = hl.titulo || "Melhores momentos";
+  $("#hl-title").textContent = hl.titulo || "Resumo da partida";
   const busy = BUSY.has(job.status);
+  const pend = recapPending(job);
+  $("#hl-pending").classList.toggle("hidden", !pend.any && !busy);
+  $("#hl-pending").classList.toggle("busy", busy);
+  $("#hl-pending-text").textContent = busy ? (job.message || "Processando…")
+    : pend.changed ? `${pend.changed} ${pend.changed === 1 ? "lance alterado" : "lances alterados"} — os vídeos ainda não mostram isso`
+    : "Mudanças guardadas — os vídeos ainda não mostram isso";
+  $("#hl-remount").disabled = busy || !pend.any;
+  $("#me-pending").textContent = pend.any
+    ? `${pend.changed ? `${pend.changed} lance(s) alterado(s). ` : ""}Clique em Remontar vídeos no resumo para aplicar tudo de uma vez.`
+    : "As mudanças ficam guardadas até você remontar os vídeos.";
   $("#hl-ask-btn").disabled = busy;
   $("#hl-ask-reply").textContent = hl.pedido ? `Último pedido: “${hl.pedido.instrucao}” — ${hl.pedido.resposta}` : "";
   $("#hl-post").textContent = hl.post || "";
-  $("#hl-compile").disabled = BUSY.has(job.status);
+  if (!$("#hl-tabs [aria-selected=true]")) showHlTab(hlTab);
   for (const el of $$(".hl-out", panel)) {
     const v = hl[el.dataset.key];
     el.classList.toggle("hidden", !v);
@@ -620,7 +737,7 @@ async function renderHighlight(job) {
     const src = `/media/${v.file}?v=${v.rev}`;
     const video = $("video", el);
     if (video.dataset.src !== src) { video.dataset.src = src; video.src = src; }
-    $(".info", el).textContent = `· ${v.duration.toFixed(0)} s · ${v.lances} lances`;
+    $(".info", el).textContent = `· ${fmtDur(v.duration)} · ${v.lances} lances`;
     const base = (job.name || "partida").replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N} _-]/gu, "").slice(0, 50);
     Object.assign($(".dl", el), { href: src, download: `${base} - ${el.dataset.key}.mp4` });
     Object.assign($(".txt", el), { href: `/media/${v.roteiro}?v=${v.rev}`, download: `${base} - roteiro ${el.dataset.key}.txt` });
@@ -631,7 +748,56 @@ async function renderHighlight(job) {
     }
   }
   showScript();
+  if (hlTab === "legendas") loadRecapCaptions(job);
 }
+$("#hl-remount").onclick = async () => {
+  try { await postJSON(`/api/jobs/${currentJob.id}/compile`, {}); openJob(currentJob.id); }
+  catch (ex) { alert(ex.message); }
+};
+// ---- legendas da fala do resumo: texto frase a frase (o estilo fica na aba Estilo)
+let hlc = { key: null, data: null };
+async function loadRecapCaptions(job, force = false) {
+  const busy = BUSY.has(job.status);
+  $("#hlc-save").disabled = busy;
+  if (busy) {  // durante a montagem as legendas mudam: mostra de novo quando terminar
+    hlc.key = null;
+    $("#hlc-list").innerHTML = `<p class="muted small">Montando os vídeos… as legendas aparecem aqui quando terminar.</p>`;
+    return;
+  }
+  const key = `${job.id}:${job.clips.map((c) => `${c.n}.${c.rev}.${c.status}.${c.dirty ? 1 : 0}`).join(",")}`;
+  if (!force && hlc.key === key) return;
+  if ($("#hlc-list").contains(document.activeElement)) return;  // não apaga o que você está digitando
+  try { hlc = { key, data: await api(`/api/jobs/${job.id}/resumo/legendas`) }; } catch (ex) { $("#hlc-msg").textContent = ex.message; return; }
+  const d = hlc.data;
+  $("#hlc-h").checked = d.horizontal;
+  if (!d.tem_fala) {
+    $("#hlc-list").innerHTML = `<p class="muted small">Este resumo foi feito só pela imagem: não há fala transcrita para legendar.</p>`;
+    return;
+  }
+  $("#hlc-list").innerHTML = d.lances.map((l, li) => `
+    <div class="hlc-lance"><div class="hlc-head"><b>${escapeHtml(l.title || `Lance ${l.n}`)}</b>
+      <span class="muted small">${l.no_short ? "short e horizontal" : "só horizontal"}</span></div>
+      ${l.lines.length ? l.lines.map((x, i) => `<label class="hlc-line"><span class="tc">${fmtTime(x.t)}</span>
+        <input data-l="${li}" data-i="${i}" value="${escapeHtml(x.text)}" maxlength="200" ${x.manual ? `disabled title="Legenda adicionada à mão: edite no editor do lance"` : ""}></label>`).join("")
+        : `<p class="muted small">Sem fala neste lance.</p>`}</div>`).join("");
+}
+$("#hlc-save").onclick = async () => {
+  const d = hlc.data;
+  if (!d) return;
+  const linhas = [];
+  for (const inp of $$("#hlc-list input[data-l]")) {
+    const l = d.lances[+inp.dataset.l], x = l.lines[+inp.dataset.i];
+    if (!x.manual && inp.value.trim() !== x.text) linhas.push({ n: l.n, keys: x.keys, text: inp.value.trim() });
+  }
+  $("#hlc-save").disabled = true;
+  try {
+    const r = await postJSON(`/api/jobs/${currentJob.id}/resumo/legendas`, { horizontal: $("#hlc-h").checked, linhas });
+    $("#hlc-msg").textContent = r.lances ? `Guardado em ${r.lances} lance(s).` : "Guardado.";
+    hlc.key = null;
+    openJob(currentJob.id);
+  } catch (ex) { $("#hlc-msg").textContent = ex.message; }
+  finally { $("#hlc-save").disabled = false; }
+};
 function showScript() {
   const box = $("#hl-script");
   if (document.activeElement === box) return;  // não apaga o que você está editando no meio do polling
@@ -657,87 +823,112 @@ $("#hl-copy").onclick = async (e) => {
   setTimeout(() => (e.target.textContent = "Copiar"), 1500);
 };
 // ---- editor da partida: assistir à partida e escolher os trechos do resumo
-const me = { data: null, sel: null };
+const me = { data: null, sel: null, draft: null, tl: null, raf: 0 };
 const meVideo = $("#me-video");
 const meAbs = () => (me.data ? me.data.start + meVideo.currentTime : 0);  // segundo da live original
-const meSeek = (t) => { if (me.data) meVideo.currentTime = Math.max(0, t - me.data.start); };
+const meSeek = (t) => { if (me.data) meVideo.currentTime = Math.max(0, Math.min(me.data.end, t) - me.data.start); };
+// campos de tempo: mostram HH:MM:SS.d e aceitam 51:22, 1:02:03 ou segundos
+const getT = (sel) => parseTime($(sel).value);
+const setT = (sel, t) => ($(sel).value = t == null || t === "" ? "" : fmtTime(t, true));
+$$(".time-in").forEach((inp) => inp.addEventListener("change", () => {
+  const t = parseTime(inp.value);
+  inp.classList.toggle("invalid", !!inp.value.trim() && isNaN(t));
+  if (inp.value.trim() && !isNaN(t)) inp.value = fmtTime(t, true);
+  if (inp.closest("#match-ed")) meDraftFromInputs();
+}));
 async function openMatchEditor() {
   const dlg = $("#match-ed");
   dlg.showModal();
   $("#me-loading").classList.remove("hidden");
   $("#me-body").classList.add("hidden");
+  $("#me-tlwrap").classList.add("hidden");
   try {
     me.data = await api(`/api/jobs/${currentJob.id}/partida`);
   } catch (ex) { $("#me-loading").textContent = ex.message; return; }
   meVideo.src = `/media/${me.data.file}`;
   $("#me-loading").classList.add("hidden");
   $("#me-body").classList.remove("hidden");
-  me.sel = null;
-  drawMatch();
+  $("#me-tlwrap").classList.remove("hidden");
+  if (!me.tl) {
+    me.tl = new Timeline($("#me-tl"), {
+      onSeek: (t) => meSeek(t),
+      onSelect: (n) => { selectLance(n); const c = currentJob.clips.find((x) => x.n === n); if (c) meSeek(c.start); },
+      onTrim: (n, s, e) => {  // arrastar a borda: ajusta o lance (salva no botão)
+        if (me.sel !== n) selectLance(n);
+        const prev = me.draft && me.draft.n === n ? me.draft : currentJob.clips.find((x) => x.n === n);
+        const movedEnd = prev && Math.abs((prev.s ?? prev.start) - s) < 1e-6;
+        me.draft = { n, s, e };
+        setT("#me-sel-start", s); setT("#me-sel-end", e);
+        $("#me-sel-dirty").classList.remove("hidden");
+        meSeek(movedEnd ? e : s);  // mostra o quadro da borda que você está arrastando
+      },
+      onMark: (s, e) => { setT("#me-new-start", s); setT("#me-new-end", e); drawMatch(); $("#me-new-title").focus(); },
+      onMarker: (m) => meSeek(m.t - 5),  // gol: começa 5 s antes para ver o lance
+    });
+  }
+  me.sel = null; me.draft = null;
+  setT("#me-new-start", ""); setT("#me-new-end", "");
   selectLance(null);
+  meVideo.currentTime = 0;
+  me.tl.setTime(me.data.start);
+  $("#me-time").textContent = fmtTime(me.data.start, true);
 }
 function drawMatch() {
+  if (!me.data || !me.tl) return;
   const { start, end, eventos } = me.data;
-  const span = end - start;
-  const pct = (t) => `${((t - start) / span) * 100}%`;
-  const tl = $("#me-tl");
-  const items = [$("#me-head")];
-  for (const c of [...currentJob.clips].sort((a, b) => a.start - b.start)) {
-    const seg = document.createElement("button");
-    seg.className = `me-seg ${c.no_short ? "short" : "only-h"} ${me.sel === c.n ? "sel" : ""}`;
-    seg.style.left = pct(c.start);
-    seg.style.width = `${((c.end - c.start) / span) * 100}%`;
-    seg.title = `${c.title} (${fmtTime(c.start)}–${fmtTime(c.end)})`;
-    seg.onclick = (e) => { e.stopPropagation(); selectLance(c.n); meSeek(c.start); };
-    items.push(seg);
+  const segments = [...currentJob.clips].sort((a, b) => a.start - b.start).map((c) => {
+    const d = me.draft && me.draft.n === c.n ? me.draft : c;
+    return { id: c.n, s: d.s ?? d.start, e: d.e ?? d.end, cls: c.no_short ? "short" : "only-h", label: c.title, editable: true };
+  });
+  const markers = eventos.map((e) => ({
+    t: e.t, cls: e.tipo === "gol_nosso" ? "nosso" : e.tipo === "gol_deles" ? "deles" : "fim",
+    title: e.tipo === "gol_nosso" ? `Seu gol ${e.placar || ""}` : e.tipo === "gol_deles" ? `Gol sofrido ${e.placar || ""}` : "Fim do tempo normal",
+    label: e.placar || "",
+  }));
+  const ns = getT("#me-new-start"), ne = getT("#me-new-end");
+  const mark = ns > 0 && ne > ns ? { s: ns, e: ne } : null;
+  me.tl.set({ start, end, segments, markers, mark, selected: me.sel });
+}
+function meDraftFromInputs() {
+  if (me.sel != null) {
+    const s = getT("#me-sel-start"), e = getT("#me-sel-end");
+    if (e > s) { me.draft = { n: me.sel, s, e }; $("#me-sel-dirty").classList.remove("hidden"); }
   }
-  for (const e of eventos) {
-    const m = document.createElement("span");
-    m.className = `me-goal ${e.tipo}`;
-    m.style.left = pct(e.t);
-    m.title = `${e.tipo === "gol_nosso" ? "Seu gol" : e.tipo === "gol_deles" ? "Gol sofrido" : "Fim do tempo"} ${e.placar || ""}`;
-    items.push(m);
-  }
-  const ns = parseFloat($("#me-new-start").value), ne = parseFloat($("#me-new-end").value);
-  if (ns && ne && ne > ns) {
-    const mark = document.createElement("span");
-    mark.className = "me-mark"; mark.style.left = pct(ns); mark.style.width = `${((ne - ns) / span) * 100}%`;
-    items.push(mark);
-  }
-  tl.replaceChildren(...items);
-  tl.onclick = (e) => {
-    const r = tl.getBoundingClientRect();
-    meSeek(start + ((e.clientX - r.left) / r.width) * span);
-  };
+  drawMatch();
 }
 function selectLance(n) {
   me.sel = n;
+  if (!me.draft || me.draft.n !== n) me.draft = null;
   const c = currentJob.clips.find((x) => x.n === n);
   $("#me-sel-empty").classList.toggle("hidden", !!c);
   $("#me-sel-body").classList.toggle("hidden", !c);
+  $("#me-sel-dirty").classList.toggle("hidden", !me.draft);
   if (c) {
     $("#me-sel-title").textContent = c.title;
-    $("#me-sel-start").value = c.start.toFixed(1);
-    $("#me-sel-end").value = c.end.toFixed(1);
+    setT("#me-sel-start", me.draft ? me.draft.s : c.start);
+    setT("#me-sel-end", me.draft ? me.draft.e : c.end);
     $("#me-sel-short").checked = !!c.no_short;
   }
-  if (me.data) drawMatch();
+  drawMatch();
 }
-meVideo.addEventListener("timeupdate", () => {
+function meTick() {  // cabeça de reprodução suave enquanto toca (o timeupdate só vem ~4x por segundo)
   if (!me.data) return;
   const t = meAbs();
-  $("#me-time").textContent = `${fmtTime(t, true)} da live`;
-  $("#me-head").style.left = `${((t - me.data.start) / (me.data.end - me.data.start)) * 100}%`;
+  $("#me-time").textContent = fmtTime(t, true);
+  me.tl?.setTime(t, !meVideo.paused);
   if (me.stopAt && t >= me.stopAt) { meVideo.pause(); me.stopAt = null; }
-});
+  if (!meVideo.paused) me.raf = requestAnimationFrame(meTick);
+}
+meVideo.addEventListener("timeupdate", () => { if (meVideo.paused) meTick(); });
+meVideo.addEventListener("seeked", meTick);
 $("#me-play").onclick = () => (meVideo.paused ? meVideo.play() : meVideo.pause());
-meVideo.addEventListener("play", () => ($("#me-play").textContent = "Pausar"));
-meVideo.addEventListener("pause", () => ($("#me-play").textContent = "Tocar"));
+meVideo.addEventListener("play", () => { $("#me-play").textContent = "Pausar"; cancelAnimationFrame(me.raf); me.raf = requestAnimationFrame(meTick); });
+meVideo.addEventListener("pause", () => { $("#me-play").textContent = "Tocar"; meTick(); });
 $("#me-back").onclick = () => meSeek(meAbs() - 5);
 $("#me-fwd").onclick = () => meSeek(meAbs() + 5);
-$("#me-sel-in").onclick = () => ($("#me-sel-start").value = meAbs().toFixed(1));
-$("#me-sel-out").onclick = () => ($("#me-sel-end").value = meAbs().toFixed(1));
-$("#me-sel-play").onclick = () => { meSeek(+$("#me-sel-start").value); me.stopAt = +$("#me-sel-end").value; meVideo.play(); };
+$("#me-sel-in").onclick = () => { setT("#me-sel-start", meAbs()); meDraftFromInputs(); };
+$("#me-sel-out").onclick = () => { setT("#me-sel-end", meAbs()); meDraftFromInputs(); };
+$("#me-sel-play").onclick = () => { meSeek(getT("#me-sel-start")); me.stopAt = getT("#me-sel-end"); meVideo.play(); };
 const meErr = (msg) => ($("#me-error").textContent = msg || "");
 async function meRefresh() {
   currentJob = await api(`/api/jobs/${currentJob.id}`);
@@ -749,42 +940,46 @@ $("#me-sel-short").onchange = async (e) => {
   catch (ex) { meErr(ex.message); }
 };
 $("#me-sel-save").onclick = async () => {
-  const s = +$("#me-sel-start").value, e = +$("#me-sel-end").value;
+  const s = getT("#me-sel-start"), e = getT("#me-sel-end");
+  if (isNaN(s) || isNaN(e)) return meErr("use o formato HH:MM:SS (ex.: 00:51:22.5)");
   if (!(e - s >= 1)) return meErr("o trecho precisa ter pelo menos 1 segundo");
-  try { await postJSON(`/api/jobs/${currentJob.id}/clips/${me.sel}`, { start: s, end: e }); meErr(); await meRefresh(); }
-  catch (ex) { meErr(ex.message); }
+  try {
+    await postJSON(`/api/jobs/${currentJob.id}/clips/${me.sel}`, { start: s, end: e });
+    me.draft = null; $("#me-sel-dirty").classList.add("hidden");
+    meErr(); await meRefresh();
+  } catch (ex) { meErr(ex.message); }
 };
 $("#me-sel-del").onclick = async () => {
   const c = currentJob.clips.find((x) => x.n === me.sel);
   if (!c || !confirm(`Remover o lance "${c.title}" do resumo?`)) return;
-  try { await api(`/api/jobs/${currentJob.id}/clips/${me.sel}`, { method: "DELETE" }); meErr(); selectLance(null); await meRefresh(); }
+  try { await api(`/api/jobs/${currentJob.id}/clips/${me.sel}`, { method: "DELETE" }); meErr(); me.draft = null; selectLance(null); await meRefresh(); }
   catch (ex) { meErr(ex.message); }
 };
 $("#me-new-add").onclick = async () => {
-  const s = +$("#me-new-start").value, e = +$("#me-new-end").value;
-  if (!(e - s >= 2)) return meErr("marque o início (I) e o fim (O) do trecho, com pelo menos 2 s");
+  const s = getT("#me-new-start"), e = getT("#me-new-end");
+  if (isNaN(s) || isNaN(e)) return meErr("use o formato HH:MM:SS (ex.: 00:51:22.5)");
+  if (!(e - s >= 2)) return meErr("arraste na linha do tempo (ou use I e O) para marcar um trecho de pelo menos 2 s");
   try {
     const c = await postJSON(`/api/jobs/${currentJob.id}/clips`, { start: s, end: e, title: $("#me-new-title").value.trim() });
-    $("#me-new-start").value = $("#me-new-end").value = $("#me-new-title").value = "";
+    setT("#me-new-start", ""); setT("#me-new-end", ""); $("#me-new-title").value = "";
     meErr(); await meRefresh(); selectLance(c.n);
   } catch (ex) { meErr(ex.message); }
 };
 document.addEventListener("keydown", (e) => {
   if (!$("#match-ed").open || e.target.closest?.("input, textarea")) return;
   const k = e.key.toLowerCase();
-  if (k === "i") { $("#me-new-start").value = meAbs().toFixed(1); drawMatch(); }
-  else if (k === "o") { $("#me-new-end").value = meAbs().toFixed(1); drawMatch(); }
+  if (k === "i") { setT("#me-new-start", meAbs()); drawMatch(); }
+  else if (k === "o") { setT("#me-new-end", meAbs()); drawMatch(); }
   else if (e.key === " ") { e.preventDefault(); $("#me-play").click(); }
-  else if (e.key === "ArrowLeft") meSeek(meAbs() - (e.shiftKey ? 1 : 5));
-  else if (e.key === "ArrowRight") meSeek(meAbs() + (e.shiftKey ? 1 : 5));
+  else if (e.key === "ArrowLeft") { e.preventDefault(); meSeek(meAbs() - (e.shiftKey ? 1 : 5)); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); meSeek(meAbs() + (e.shiftKey ? 1 : 5)); }
+  else if (e.key === "+" || e.key === "=") me.tl?.zoomCmd("in");
+  else if (e.key === "-") me.tl?.zoomCmd("out");
+  else if (k === "z") me.tl?.zoomCmd("sel");
 });
 const closeMatchEditor = () => { meVideo.pause(); $("#match-ed").close(); };
 $("#me-close").onclick = closeMatchEditor;
 $("#me-done").onclick = closeMatchEditor;
-$("#me-compile").onclick = async () => {
-  try { await postJSON(`/api/jobs/${currentJob.id}/compile`, {}); closeMatchEditor(); openJob(currentJob.id); }
-  catch (ex) { meErr(ex.message); }
-};
 $("#hl-edit-btn").onclick = openMatchEditor;
 
 $("#hl-ask-btn").onclick = async () => {
@@ -798,12 +993,6 @@ $("#hl-ask-btn").onclick = async () => {
 };
 $("#hl-ask-text").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#hl-ask-btn").click(); });
 
-$("#hl-compile").onclick = async () => {
-  try {
-    await postJSON(`/api/jobs/${currentJob.id}/compile`, {});
-    openJob(currentJob.id);
-  } catch (ex) { alert(ex.message); }
-};
 
 function renderClips(job) {
   const wrap = $("#clips");
@@ -834,13 +1023,14 @@ function fillClip(el, c) {
     video.poster = `/media/${c.thumb}?v=${c.rev}`;
   }
   $(".rendering", el).classList.toggle("hidden", done || c.status === "error");
-  $(".rendering", el).textContent = c.status === "pending" ? "Na fila…" : "Renderizando…";
+  $(".rendering", el).textContent = { pending: "Na fila…", staged: "Lance novo: entra ao remontar", cancelled: "Cancelado" }[c.status] || "Renderizando…";
   // sinais que sustentam o corte: âncora lida no placar/volume e o teste sem contexto
   const sig = [];
   const a = c.anchor;
   if (a && a.kind === "gol_nosso") sig.push(`<span class="chip accent">Gol ${escapeHtml(a.placar || "")}</span>`);
   else if (a && a.kind === "gol_deles") sig.push(`<span class="chip danger">Gol sofrido ${escapeHtml(a.placar || "")}</span>`);
   else if (a && a.kind === "reacao") sig.push(`<span class="chip info">Reação forte</span>`);
+  if (c.dirty) sig.push(`<span class="chip warn" title="Mudança guardada: aparece no vídeo ao remontar">Alterado</span>`);
   if (c.marcador) sig.push(`<span class="chip accent" title="Você marcou este momento no OBS">Seu marcador</span>`);
   if (c.explorar) sig.push(`<span class="chip warn" title="Corte extra de um tipo pouco testado: poste e preencha as views para o Cortaí aprender">Exploração</span>`);
   if (c.estranho) sig.push(c.estranho.entende
@@ -858,7 +1048,7 @@ function fillClip(el, c) {
   const score = $(".score", el);
   score.textContent = c.score;
   score.className = `score ${c.score >= 75 ? "" : c.score >= 50 ? "mid" : "low"}`;
-  $(".dur", el).textContent = `${fmtTime(c.start)} → ${fmtTime(c.end)} · ${(c.out_duration ?? c.end - c.start).toFixed(0)}s`;
+  $(".dur", el).textContent = `${fmtTime(c.start)} → ${fmtTime(c.end)} · ${fmtDur(c.out_duration ?? c.end - c.start)}`;
   const extras = [LAYOUTS[c.layout] || c.layout];
   if (c.zooms_applied) extras.push(`${c.zooms_applied} zoom${c.zooms_applied > 1 ? "s" : ""}`);
   if (c.removed > 0.2) extras.push(`−${c.removed.toFixed(1)}s de pausas`);
@@ -1210,7 +1400,7 @@ function tick() {
   if (ed.playingSel && t >= ed.sel.e) { vid.pause(); vid.currentTime = ed.sel.e - ed.ws; }
   const len = ed.sel.e - ed.sel.s;
   $("#ed-time").textContent = `${fmtTime(t, true)}`;
-  $("#ed-sel-label").textContent = `Corte: ${fmtTime(ed.sel.s, true)} → ${fmtTime(ed.sel.e, true)} (${len.toFixed(1)}s)`;
+  $("#ed-sel-label").textContent = `Corte: ${fmtTime(ed.sel.s, true)} → ${fmtTime(ed.sel.e, true)} (${len.toFixed(1)} s)`;
   updateWordClasses(t);
   updateCaptionPreview(t);
   drawTimeline();

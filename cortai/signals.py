@@ -166,38 +166,48 @@ def robust_peaks(loud: list[float], z_min: float = Z_MIN) -> list[dict]:
             peaks.append({"t": round(t, 2), "z": round(float(z[i]), 1), "db": round(float(db[i]), 1)})
     return sorted(peaks, key=lambda p: p["t"])
 
-LABELS = {
-    "susto": "😱 SUSTO PROVÁVEL: silêncio e de repente som alto",
-    "grito": "🔊 fala muito alta/grito",
-    "som_alto": "💥 som alto SEM fala (risada, grito ou som do jogo)",
-    "sem_fala_com_som": "🎮 sem fala mas com som (risada, reação ou jogo rolando)",
-    "silencio": "🤐 silêncio",
-    # eventos do jogo lidos no placar (hud.py) e reação normalizada (robust_peaks)
-    "gol_nosso": "⚽ GOL DO TIME DO STREAMER (lido no placar)",
-    "gol_deles": "🥅 GOL SOFRIDO (lido no placar)",
-    "inicio": "🏁 começo de partida",
-    "fim_do_tempo": "⏱ fim do tempo normal → prorrogação",
-    "reacao": "📈 reação forte (volume muito acima do normal dele neste trecho da live)",
-    "marcador": "📌 O STREAMER MARCOU ESTE MOMENTO NO OBS (o lance costuma estar nos ~45 s antes)",
+SYMBOLS = {"susto": "😱", "grito": "🔊", "som_alto": "💥", "sem_fala_com_som": "🎮", "silencio": "🤐",
+           "gol_nosso": "⚽", "gol_deles": "🥅", "inicio": "🏁", "fim_do_tempo": "⏱", "reacao": "📈", "marcador": "📌"}
+# o que cada símbolo quer dizer vai UMA vez por prompt (legend); cada evento sai curto (describe). Antes a
+# descrição inteira se repetia em cada evento: 60% do prompt de escolha de cortes era isso.
+MEANING = {
+    "susto": "susto provável (silêncio e de repente som alto; salto = dB acima do trecho baixo)",
+    "grito": "fala muito alta/grito", "som_alto": "som alto SEM fala (risada, grito ou som do jogo)",
+    "sem_fala_com_som": "sem fala mas com som (risada, reação ou jogo rolando)", "silencio": "silêncio",
+    "gol_nosso": "gol do time do streamer lido no placar (placar depois do gol, relógio, replay até o segundo)",
+    "gol_deles": "gol sofrido lido no placar (placar, relógio, replay até)", "inicio": "começo de partida",
+    "fim_do_tempo": "fim do tempo normal → prorrogação",
+    "reacao": "reação forte: volume muito acima do normal dele neste trecho (z maior = reação maior)",
+    "marcador": "o streamer marcou este momento no OBS (o lance costuma estar nos ~45 s antes)",
 }
 
 
+def legend(events: list[dict]) -> str:
+    """Uma linha com o significado só dos símbolos que aparecem."""
+    kinds = [k for k in SYMBOLS if any(e["kind"] == k for e in events)]
+    if not kinds:
+        return ""
+    return ("Marcadores entre < > (segundo, símbolo, duração, dB acima do normal): "
+            + "; ".join(f"{SYMBOLS[k]} {MEANING[k]}" for k in kinds) + ".")
+
+
 def describe(event: dict) -> str:
-    kind = event["kind"]
+    kind, t = event["kind"], f"[{event['t']:.1f}]"
+    sym = SYMBOLS.get(kind, kind)
     if kind in ("gol_nosso", "gol_deles"):
-        return (f"[{event['t']:.2f}] <{LABELS[kind]}: placar {event.get('placar') or '?'}"
-                f"{', relógio ' + event['relogio'] if event.get('relogio') else ''}; replay até {event.get('fim_pausa', event['t']):.0f}s>")
+        return (f"{t} <{sym} {event.get('placar') or '?'}{' rel ' + event['relogio'] if event.get('relogio') else ''}"
+                f" replay→{event.get('fim_pausa', event['t']):.0f}>")
     if kind in ("inicio", "fim_do_tempo"):
-        return f"[{event['t']:.2f}] <{LABELS[kind]}>"
+        return f"{t} <{sym}>"
     if kind == "reacao":
-        return f"[{event['t']:.2f}] <{LABELS[kind]}: z={event.get('z', 0):.1f}>"
+        return f"{t} <{sym} z{event.get('z', 0):.1f}>"
     if kind == "marcador":
         name = event.get("titulo") or ""
-        return f"[{event['t']:.2f}] <{LABELS[kind]}{': ' + name if name and not name.startswith('Unnamed') else ''}>"
-    extra = f", +{event['db']:.0f} dB" if event["kind"] in LOUD_KINDS else ""
-    if event["kind"] == "susto":
-        extra += f", salto de {event.get('jump', 0):.0f} dB vindo de um trecho baixo"
-    return f"[{event['t']:.2f}] <{LABELS[event['kind']]} por {event['dur']:.1f}s{extra}>"
+        return f"{t} <{sym}{' ' + name if name and not name.startswith('Unnamed') else ''}>"
+    extra = f" +{event['db']:.0f}dB" if kind in LOUD_KINDS else ""
+    if kind == "susto":
+        extra += f" salto {event.get('jump', 0):.0f}"
+    return f"{t} <{sym} {event['dur']:.1f}s{extra}>"
 
 
 LOUD_KINDS = ("grito", "som_alto", "susto")

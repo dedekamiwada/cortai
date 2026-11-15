@@ -15,11 +15,14 @@ const sendJSON = (method, path, body) => api(path, { method, headers: { "content
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const uid = (p) => p + Math.random().toString(36).slice(2, 9);
+// tempo no formato universal HH:MM:SS (com `dec` casas nos segundos), igual ao resto do Cortaí
 const fmt = (s, dec = 1) => {
+  const k = 10 ** dec;
   s = Math.max(0, s || 0);
-  const m = Math.floor(s / 60);
-  const r = (s % 60).toFixed(dec).padStart(dec ? 3 + dec : 2, "0");
-  return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${r}` : `${m}:${r}`;
+  s = dec ? Math.round(s * k) / k : Math.floor(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s - h * 3600 - m * 60;
+  const p2 = (n) => String(n).padStart(2, "0");
+  return `${p2(h)}:${p2(m)}:${dec ? r.toFixed(dec).padStart(3 + dec, "0") : p2(Math.floor(r))}`;
 };
 
 const FONTS = ["Arial Black", "Arial", "Impact", "Segoe UI", "Verdana", "Georgia", "Comic Sans MS", "Courier New", "Trebuchet MS"];

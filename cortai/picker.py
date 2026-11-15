@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -184,17 +185,21 @@ def system_prompt(content_type: str, style: dict | None) -> str:
     return text
 
 
-def format_transcript(transcript: dict, events: list[dict], start: float = 0.0, end: float = float("inf")) -> str:
+def format_transcript(transcript: dict, events: list[dict], start: float = 0.0, end: float = float("inf"),
+                      legend: bool = True) -> str:
+    """Fala "[início–fim] texto" (1 casa: o corte final encaixa nas palavras por código) intercalada com os
+    marcadores curtos; `legend` põe o significado dos símbolos uma vez no topo (desligue ao repetir blocos)."""
     lines: list[tuple[float, str]] = []
     for seg in transcript["segments"]:
         if seg["e"] < start or seg["s"] > end:
             continue
-        lines.append((seg["s"], f"[{seg['s']:.2f} → {seg['e']:.2f}] {seg['text']}"))
-    for ev in events:
-        if start <= ev["t"] <= end:
-            lines.append((ev["t"], signals.describe(ev)))
+        lines.append((seg["s"], f"[{seg['s']:.1f}–{seg['e']:.1f}] {seg['text'].strip()}"))
+    inside = [ev for ev in events if start <= ev["t"] <= end]
+    for ev in inside:
+        lines.append((ev["t"], signals.describe(ev)))
     lines.sort(key=lambda x: x[0])
-    return "\n".join(text for _, text in lines)
+    head = [signals.legend(inside)] if legend and inside else []
+    return "\n".join(head + [text for _, text in lines])
 
 
 def build_prompt(transcript: dict, events: list[dict], duration: float, opts: dict) -> str:
@@ -234,8 +239,11 @@ def review_prompt(candidates: list[Clip], transcript: dict, events: list[dict], 
     for i, (c, (ws, we), img) in enumerate(zip(candidates, windows, images), 1):
         parts.append(f"## Candidato {i} — imagem {img} (quadros de {ws:.1f}s a {we:.1f}s)")
         parts.append(f"Proposta: \"{c.title}\" de {c.start:.2f}s a {c.end:.2f}s, pico em {c.peak or c.start:.2f}s. {c.reason}")
-        parts.append(format_transcript(transcript, events, ws, we))
+        parts.append(format_transcript(transcript, events, ws, we, legend=False))
         parts.append("")
+    key = signals.legend([e for e in events if any(ws <= e["t"] <= we for ws, we in windows)])
+    if key:
+        parts.insert(0, key + "\n")
     parts.append('Responda somente com JSON {"clips": [...]} com um item por candidato.')
     return "\n".join(parts)
 
@@ -333,6 +341,14 @@ def resolve_backend(requested: str) -> str:
 
 
 USAGE_FILE = None  # definido por quem usa (jobs.py): planilha de consumo por chamada
+USAGE_FIELDS = ["quando", "etapa", "backend", "modelo", "esforco", "imagens", "rodadas", "entrada",
+                "cache_criado", "cache_lido", "saida", "custo_usd", "segundos", "job"]
+_usage_ctx = threading.local()  # projeto da chamada em andamento (cada tarefa do Cortaí roda numa thread)
+_usage_lock = threading.Lock()
+
+
+def set_usage_job(job_id: str | None) -> None:
+    _usage_ctx.job = job_id
 
 
 def _log_usage(step: str, backend: str, model: str, effort: str, images: int, usage: dict, cost: float | None,
@@ -343,20 +359,28 @@ def _log_usage(step: str, backend: str, model: str, effort: str, images: int, us
     import csv
     import time as _time
 
+    row = [_time.strftime("%Y-%m-%d %H:%M:%S"), step, backend, model, effort, images, turns or "",
+           usage.get("input_tokens", 0), usage.get("cache_creation_input_tokens", 0),
+           usage.get("cache_read_input_tokens", 0), usage.get("output_tokens", 0),
+           round(cost, 5) if cost is not None else "", round(seconds, 1), getattr(_usage_ctx, "job", None) or ""]
     try:
-        USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        new = not USAGE_FILE.exists()
-        with open(USAGE_FILE, "a", newline="", encoding="utf-8-sig") as f:
-            w = csv.writer(f, delimiter=";")
-            if new:
-                w.writerow(["quando", "etapa", "backend", "modelo", "esforco", "imagens", "rodadas", "entrada",
-                            "cache_criado", "cache_lido", "saida", "custo_usd", "segundos"])
-            w.writerow([_time.strftime("%Y-%m-%d %H:%M:%S"), step, backend, model, effort, images, turns or "",
-                        usage.get("input_tokens", 0), usage.get("cache_creation_input_tokens", 0),
-                        usage.get("cache_read_input_tokens", 0), usage.get("output_tokens", 0),
-                        round(cost, 5) if cost is not None else "", round(seconds, 1)])
+        with _usage_lock:
+            USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            if USAGE_FILE.exists():
+                with open(USAGE_FILE, encoding="utf-8-sig", newline="") as f:
+                    header = next(csv.reader(f, delimiter=";"), [])
+                if header != USAGE_FIELDS:  # planilha de antes da coluna "job": reescreve o cabeçalho uma vez
+                    with open(USAGE_FILE, encoding="utf-8-sig", newline="") as f:
+                        old = list(csv.reader(f, delimiter=";"))[1:]
+                    with open(USAGE_FILE, "w", encoding="utf-8-sig", newline="") as f:
+                        csv.writer(f, delimiter=";").writerows([USAGE_FIELDS, *old])
+            else:
+                with open(USAGE_FILE, "w", encoding="utf-8-sig", newline="") as f:
+                    csv.writer(f, delimiter=";").writerow(USAGE_FIELDS)
+            with open(USAGE_FILE, "a", newline="", encoding="utf-8-sig") as f:
+                csv.writer(f, delimiter=";").writerow(row)
     except OSError:
-        pass  # registro é diagnóstico: nunca derruba um corte
+        pass  # registro é diagnóstico (ex.: planilha aberta no Excel): nunca derruba um corte
 
 
 def ask(backend: str, system: str, prompt: str, schema: dict, images: list[Path] | None = None,

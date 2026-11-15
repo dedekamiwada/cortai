@@ -11,8 +11,9 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import autocaptions, capa, captions, fx, jobs, paths, picker, posedit, studio, studio_render, styles
+from . import autocaptions, capa, captions, fx, jobs, paths, picker, posedit, proc, studio, studio_render, styles
 
+proc.install()  # registra os processos de cada projeto para o botão Cancelar
 app = FastAPI(title="Cortaí")
 jobs.load_existing()
 posedit.load_existing()
@@ -303,6 +304,24 @@ async def match_preview(job_id: str):
     return await run_in_threadpool(jobs.match_preview, job_id)
 
 
+@app.get("/api/jobs/{job_id}/resumo/legendas")
+def recap_captions(job_id: str):
+    _job_or_404(job_id)
+    try:
+        return jobs.recap_captions(job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/jobs/{job_id}/resumo/legendas")
+async def save_recap_captions(job_id: str, request: Request):
+    _job_or_404(job_id)
+    try:
+        return {"lances": jobs.save_recap_captions(job_id, await request.json())}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.post("/api/jobs/{job_id}/resumo/pedido")
 async def recap_request(job_id: str, request: Request):
     _job_or_404(job_id)
@@ -326,6 +345,26 @@ async def redo_clip(job_id: str, n: int, request: Request):
     try:
         jobs.redo_clip(job_id, n, (await request.json()).get("instrucao") or "")
     except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/cancelar")
+def cancel_job(job_id: str):
+    _job_or_404(job_id)
+    try:
+        jobs.cancel(job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/retomar")
+def resume_job(job_id: str):
+    _job_or_404(job_id)
+    try:
+        jobs.resume(job_id)
+    except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}
 

@@ -18,6 +18,9 @@ POSITIONS = {  # alinhamento ASS (numpad) e margem vertical em 1080x1920
     "middle": (5, 0),
     "top": (8, 380),
 }
+# no 16:9 não há interface de rede social por cima: margens curtas, e a letra a ~70% (cabe mais por linha)
+LANDSCAPE_POSITIONS = {"bottom": (2, 70), "middle": (5, 0), "top": (8, 60)}
+LANDSCAPE_SCALE = 0.7
 
 # Centro vertical do título (1080x1920). "band" cobre a faixa de título que lives verticais
 # (TikTok LIVE Studio) desenham entre a webcam e o jogo.
@@ -38,8 +41,8 @@ MAX_GAP = 0.5
 
 HEADER = """[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {play_w}
+PlayResY: {play_h}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
@@ -216,12 +219,16 @@ def _chunks(words: list[dict], max_words: int, max_chars: int) -> list[list[dict
 def build_ass(words: list[dict], clip_start: float, clip_end: float, opts: dict) -> str:
     """`words` com tempos absolutos do vídeo original; a saída usa tempos relativos ao clipe."""
     preset = PRESETS.get(opts.get("caption_preset") or "destaque", PRESETS["destaque"])
-    align, margin = POSITIONS.get(opts.get("caption_position") or "bottom", POSITIONS["bottom"])
+    land = bool(opts.get("landscape"))
+    table = LANDSCAPE_POSITIONS if land else POSITIONS
+    align, margin = table.get(opts.get("caption_position") or "bottom", table["bottom"])
+    k = LANDSCAPE_SCALE if land else 1.0
     hi = _ass_color(opts.get("caption_color", "#FFE600"))
     upper = bool(opts.get("caption_upper", True))
     tstyle = TITLE_STYLES.get(opts.get("title_style") or "impacto", TITLE_STYLES["impacto"])
-    lines = [HEADER.format(font=preset["font"], size=preset["size"], outline=preset["outline"],
-                           shadow=preset["shadow"], align=align, margin=margin, title_font=tstyle["font"],
+    lines = [HEADER.format(play_w=1920 if land else 1080, play_h=1080 if land else 1920,
+                           font=preset["font"], size=round(preset["size"] * k), outline=round(preset["outline"] * k),
+                           shadow=round(preset["shadow"] * k), align=align, margin=margin, title_font=tstyle["font"],
                            title_size=tstyle["size"], title_outline=tstyle["outline"],
                            title_glow_w=tstyle["outline"] * 2)]
     dur = clip_end - clip_start

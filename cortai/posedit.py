@@ -327,7 +327,7 @@ SCHEMA = {
 
 def build_prompt(dur: float, words: list[dict], events: list[dict], lib: dict, instructions: str) -> str:
     fala = " ".join(f"{w['w'].strip()}@{w['s']:.2f}" for w in words) or "(sem fala)"
-    sinais = "\n".join(signals.describe(e) for e in events) or "(nenhum)"
+    sinais = "\n".join([signals.legend(events), *(signals.describe(e) for e in events)]) if events else "(nenhum)"
     musicas = "\n".join(f"- {c}: {', '.join(fs) if fs else '(vazio' + (' → trilha gerada' if c in lib['geradas'] else ' → mudo') + ')'}"
                         for c, fs in lib["musicas"].items())
     extra = f"\n\nPedido do streamer para esta edição: {instructions}" if instructions else ""
