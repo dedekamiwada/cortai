@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import threading
 import time
 import traceback
@@ -13,7 +14,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import capa, captions, edit, frames, hud, media, paths, picker, proc, reframe, regras, render, signals, styles, titles, to_studio, transcribe
+from . import antigos, capa, captions, edit, frames, hud, media, paths, picker, proc, reframe, regras, render, serie as serie_mod, signals, styles, titles, to_studio, transcribe
 
 JOBS_DIR = paths.JOBS_DIR
 picker.USAGE_FILE = JOBS_DIR / "_uso" / "uso.csv"  # consumo de tokens por chamada (otimização com números)
@@ -51,6 +52,7 @@ DEFAULT_OPTS = {
     "voice_track": 0,                  # faixa de áudio da voz (1, 2…); 0 = automática (faixa "mic"/"voz" se houver)
     "explore": False,                  # +1 corte de um tipo pouco testado no canal, marcado como exploração
     "mode": "clips",                   # "clips" (vários cortes) ou "highlights" (melhores momentos num vídeo)
+    "saidas": "ambos",                 # resumo: "ambos", "vertical" (só o short) ou "horizontal"
     "highlight_basis": "fala_imagem",  # "fala_imagem" ou "imagem"
     "pos_susto": "",                   # terror: "congelar", "pb" ou "congelar_pb" do susto até o fim
     "pos_susto_musica": False,         # trilha da biblioteca (musicas/pos_susto) a partir do susto
@@ -441,7 +443,7 @@ def _run_pipeline(job_id: str) -> None:
 
     style = styles.get(JOBS_DIR, opts.get("style_id"))
     system = (picker.system_prompt(opts["content_type"], style) + titles.guide(JOBS_DIR, options=False)
-              + titles.clip_guide(JOBS_DIR))
+              + titles.clip_guide(JOBS_DIR) + antigos.guide(JOBS_DIR))
     prompt = picker.build_prompt(transcript, events, src["duration"], opts)
     (d / "prompt.txt").write_text(picker.manual_prompt(system, prompt), encoding="utf-8")
 
@@ -611,7 +613,8 @@ def _run_highlights(job_id: str) -> None:
     serie_txt = serie.replace("{n}", str(int(opts.get("serie_n") or 1))) if serie else ""
     raw = picker.ask(backend, highlights.REVIEW_SYSTEM,
                      highlights.review_prompt(candidates, windows, [p.name for p in images], context, extra, serie_txt,
-                                              legend=signals.legend(events)),
+                                              legend=signals.legend(events),
+                                              campanha=serie_mod.context(JOBS_DIR, job_id) if serie else ""),
                      highlights.REVIEW_SCHEMA, images, step="resumo_revisao")
     (d / "highlight-review.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     plan = highlights.normalize(raw, candidates, src["duration"])
@@ -634,8 +637,9 @@ def _run_highlights(job_id: str) -> None:
            highlight={"titulo": plan["titulo"], "gancho": plan["gancho"], "post": plan["post"],
                       "adversario": plan.get("adversario", ""), "serie": serie_txt})
     words = transcribe.all_words(transcript)
+    fmt = "horizontal" if _saidas(get(job_id)) == "horizontal" else "vertical"
     for idx in range(len(clips)):
-        update(job_id, message=f"Renderizando o lance {idx + 1} de {len(clips)} (vertical)…",
+        update(job_id, message=f"Renderizando o lance {idx + 1} de {len(clips)} ({fmt})…",
                progress=idx / len(clips) * 0.5)
         _render_one(job_id, idx, words)
     _compile_highlights(job_id)
@@ -737,6 +741,46 @@ def _redo_clip(job_id: str, idx: int, instruction: str, backend: str) -> None:
     _render_one(job_id, idx, _words(job_id))
 
 
+def series_info() -> dict:
+    """Série atual para a tela inicial: bordão, próximo episódio, meta, campanha e episódios."""
+    data = serie_mod.load(JOBS_DIR)
+    d = defaults()
+    eps = [{**e, "existe": e["job"] in _jobs} for e in data["episodios"]]
+    return {"bordao": d.get("serie", ""), "proximo": d.get("serie_n", 1), "meta": data["meta"],
+            "campanha": serie_mod.record(data), "episodios": eps}
+
+
+def match_old_clips(job_id: str, folder: str) -> list[dict]:
+    """Cortes que você fez à mão antes: acha de que trecho desta live cada um saiu (pelo volume, sem IA) e guarda
+    os achados como exemplos do seu gosto para as próximas escolhas."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    loud_file = _dir(job_id) / "loudness.json"
+    if not loud_file.exists():
+        raise ValueError("este projeto ainda não tem o áudio da live medido")
+    root = Path((folder or "").strip().strip('"'))
+    if not root.is_dir():
+        raise ValueError("pasta não encontrada")
+    files = sorted(p for p in root.iterdir() if p.is_file() and p.suffix.lower() in antigos.VIDEO_EXT)
+    if not files:
+        raise ValueError("nenhum vídeo nesta pasta")
+    if len(files) > antigos.MAX_FILES:
+        raise ValueError(f"a pasta tem {len(files)} vídeos; separe até {antigos.MAX_FILES} desta live")
+    live = json.loads(loud_file.read_text(encoding="utf-8"))
+    found = []
+    for f in files:
+        try:
+            res = antigos.align(antigos.envelope(f), live) or {"ok": False}
+        except Exception as exc:  # um arquivo ruim não derruba os outros
+            res = {"ok": False, "erro": str(exc)[:120]}
+        found.append({"arquivo": f.name, **res})
+    words = _words(job_id) if (_dir(job_id) / "transcript.json").exists() else []
+    antigos.save_examples(JOBS_DIR, job_id, found, words)
+    update(job_id, antigos=found)
+    return found
+
+
 def quality(job_id: str) -> dict:
     """Métricas de qualidade do projeto ANTES de postar (as da plataforma chegam tarde e com ruído): o que a
     pesquisa recomendou acompanhar por live."""
@@ -769,6 +813,33 @@ def quality(job_id: str) -> dict:
         "partidas": len({match_of(c.get("peak") or c["start"]) for c in clips}) if starts else None,
         "pausas_removidas_s": round(sum(c.get("removed") or 0 for c in clips), 1),
         "duracao_media_s": round(sum(c.get("out_duration") or (c["end"] - c["start"]) for c in clips) / n, 1),
+        **_edge_metrics(job_id, clips),
+    }
+
+
+def _edge_metrics(job_id: str, clips: list[dict]) -> dict:
+    """O resto do que a pesquisa pediu medir antes de postar: borda cortando palavra, silêncio que sobrou,
+    variedade de tipos de momento e quanto tempo até o primeiro clipe pronto."""
+    d = _dir(job_id)
+    words = _words(job_id) if (d / "transcript.json").exists() else []
+    loud = json.loads((d / "loudness.json").read_text(encoding="utf-8")) if (d / "loudness.json").exists() else []
+    inside = lambda t: any(w["s"] + 0.05 < t < w["e"] - 0.05 for w in words if w["s"] - 1 < t < w["e"] + 1)
+    cut_words = sum(1 for c in clips if inside(c["start"]) or inside(c["end"]))
+    silent = []
+    if loud:
+        quiet = signals.talk_level(loud, words) - 20
+        for c in clips:
+            a, b = int(c["start"] / signals.HOP), int(c["end"] / signals.HOP)
+            s = sum(1 for v in loud[a:b] if v < quiet) * signals.HOP - (c.get("removed") or 0)
+            silent.append(max(0.0, s) / max(1.0, c.get("out_duration") or (c["end"] - c["start"])))
+    kinds = {(c.get("anchor") or {}).get("kind") or "fala" for c in clips}
+    ready = [c["pronto_em"] for c in clips if c.get("pronto_em")]
+    job = get(job_id)
+    return {
+        "borda_em_palavra": cut_words,
+        "silencio_pct": round(100 * sum(silent) / len(silent)) if silent else None,
+        "tipos": sorted(kinds),
+        "primeiro_pronto_s": round(min(ready) - job["created"]) if ready and job.get("created") else None,
     }
 
 
@@ -788,6 +859,7 @@ def timeline(job_id: str) -> dict:
                     for e in hud_data.get("events", []) if e.get("tipo") in ("gol_nosso", "gol_deles", "fim_do_tempo")],
         "reacoes": signals.robust_peaks(loud),
         "cortes": [{"n": c["n"], "start": c["start"], "end": c["end"], "title": c["title"]} for c in job["clips"]],
+        "antigos": [a for a in job.get("antigos") or [] if a.get("ok")],
     }
 
 
@@ -855,7 +927,8 @@ def compile_highlights(job_id: str) -> None:
 
 def _apply_pending(job_id: str) -> None:
     job = get(job_id)
-    idxs = [i for i, c in enumerate(job["clips"]) if c.get("dirty") or c.get("status") in ("staged", "pending")]
+    idxs = [i for i, c in enumerate(job["clips"])
+            if c.get("dirty") or c.get("status") in ("staged", "pending", "cancelled", "error")]
     words = _words(job_id) if idxs else []
     for k, idx in enumerate(idxs, 1):
         update(job_id, message=f"Renderizando o lance alterado {k} de {len(idxs)}…", progress=0.6 * (k - 1) / len(idxs))
@@ -877,29 +950,26 @@ def _compile_highlights(job_id: str) -> None:
     if not done:
         raise RuntimeError("nenhum lance renderizado")
 
-    short = [c for c in done if c.get("no_short")] or done
-    words = _words(job_id) if hl.get("legenda_horizontal") else []
-    update(job_id, status="rendering", message="Montando o short vertical…", progress=0.6)
-    vsegs = [plain_clip(c["file"]) for c in short]
+    saidas = _saidas(job)
     card = f"VS {hl['adversario']}" if hl.get("adversario") else ""  # card do adversário na abertura
-    vstarts = highlights.compile_video(vsegs, [], card, out_dir / "short-vertical.mp4", 1080, 1920, fps)
+    versions = {}
+    if saidas in ("ambos", "vertical"):
+        short = [c for c in done if c.get("no_short")] or done
+        update(job_id, status="rendering", message="Montando o short vertical…", progress=0.6)
+        vsegs = [plain_clip(c["file"]) for c in short]
+        vstarts = highlights.compile_video(vsegs, [], card, out_dir / "short-vertical.mp4", 1080, 1920, fps)
+        versions["vertical"] = (short, vsegs, vstarts, "short-vertical")
+    if saidas in ("ambos", "horizontal"):
+        words = _words(job_id) if hl.get("legenda_horizontal") else []
+        hsegs = []
+        for k, c in enumerate(done, 1):
+            update(job_id, status="rendering", message=f"Trecho horizontal do lance {k} de {len(done)}…",
+                   progress=0.7 + 0.2 * (k - 1) / len(done))
+            hsegs.append(_hseg(job_id, c, words))
+        update(job_id, message="Montando a versão horizontal…", progress=0.92)
+        hstarts = highlights.compile_video(hsegs, [], card, out_dir / "horizontal.mp4", 1920, 1080, fps)
+        versions["horizontal"] = (done, hsegs, hstarts, "horizontal")
 
-    hsegs = []
-    for k, c in enumerate(done, 1):
-        update(job_id, message=f"Renderizando o lance {k} de {len(done)} (horizontal)…",
-               progress=0.7 + 0.2 * (k - 1) / len(done))
-        out = out_dir / "h" / f"{c['n']:02d}.mp4"
-        ass = ""
-        if hl.get("legenda_horizontal") and words:
-            lo = {**opts, **c.get("overrides", {}), "title_overlay": False, "landscape": True, "captions": True}
-            ass = captions.build_ass(words, c["start"], c["end"], lo)
-        highlights.horizontal_segment(Path(src["path"]), src, c["start"], c["end"], out,
-                                      opts.get("voice_enhance", True), ass)
-        hsegs.append(out)
-    update(job_id, message="Montando a versão horizontal…", progress=0.92)
-    hstarts = highlights.compile_video(hsegs, [], card, out_dir / "horizontal.mp4", 1920, 1080, fps)
-
-    versions = {"vertical": (short, vsegs, vstarts, "short-vertical"), "horizontal": (done, hsegs, hstarts, "horizontal")}
     for key, (clips, segs, starts, name) in versions.items():
         durations = [highlights._duration(s) for s in segs]
         total = highlights._duration(out_dir / f"{name}.mp4")
@@ -912,10 +982,84 @@ def _compile_highlights(job_id: str) -> None:
                    "roteiro": f"{job_id}/highlights/{name}-roteiro.txt",
                    "srt": f"{job_id}/highlights/{name}-roteiro.srt",
                    "rev": int((hl.get(key) or {}).get("rev", 0)) + 1}
-    shutil.rmtree(out_dir / "h", ignore_errors=True)
+    for key, name in (("vertical", "short-vertical"), ("horizontal", "horizontal")):
+        if key not in versions:  # saída não pedida: some da tela e do disco (não fica um vídeo velho para trás)
+            hl.pop(key, None)
+            for f in (f"{name}.mp4", f"{name}-roteiro.txt", f"{name}-roteiro.srt"):
+                (out_dir / f).unlink(missing_ok=True)
+    shutil.rmtree(out_dir / "h", ignore_errors=True)  # pasta da versão antiga (trechos agora ficam em cada lance)
     hl.pop("pendente", None)
-    update(job_id, highlight=hl, status="done", progress=1.0,
-           message=f"Short ({hms(hl['vertical']['duration'])}) e horizontal ({hms(hl['horizontal']['duration'])}) prontos")
+    if (opts.get("serie") or "").strip():  # episódio da série: entra no histórico (placar final lido no jogo)
+        f = d / "hud_events.json"
+        events = json.loads(f.read_text(encoding="utf-8")).get("events", []) if f.exists() else []
+        a = float(opts.get("range_start") or 0)
+        b = float(opts.get("range_end") or 0) or src["duration"]
+        placar, resultado = serie_mod.final_score(events, a, b)
+        serie_mod.register(JOBS_DIR, job_id, int(opts.get("serie_n") or 1), hl.get("serie", ""), hl.get("adversario", ""),
+                           placar, resultado, hl.get("titulo", ""))
+    made = [f"{'short' if k == 'vertical' else 'horizontal'} ({hms(hl[k]['duration'])})" for k in versions]
+    update(job_id, highlight=hl, status="done", progress=1.0, message=" e ".join(made).capitalize() + " pronto" + ("s" if len(made) > 1 else ""))
+
+
+SAIDAS = ("ambos", "vertical", "horizontal")
+CAPTION_LOOK = ("captions", "caption_preset", "caption_position", "caption_color", "caption_upper",
+                "keyword_highlight", "keyword_color", "word_fixes", "word_adds")
+
+
+def _saidas(job: dict) -> str:
+    v = job["options"].get("saidas") or "ambos"
+    return v if v in SAIDAS else "ambos"
+
+
+def _hseg(job_id: str, clip: dict, words: list[dict]) -> Path:
+    """Trecho horizontal do lance, guardado na pasta do lance: só é codificado de novo quando algo que muda o
+    resultado mudou (antes cada Remontar recodificava todos os lances, mesmo sem mudança)."""
+    from . import highlights
+
+    job = get(job_id)
+    src, opts, hl = job["source"], job["options"], job.get("highlight") or {}
+    o = {**opts, **clip.get("overrides", {})}
+    cap = bool(hl.get("legenda_horizontal")) and bool(words)
+    key = {"v": 1, "s": clip["start"], "e": clip["end"], "voz": bool(opts.get("voice_enhance", True)), "cap": cap,
+           "look": {k: o.get(k) for k in CAPTION_LOOK} if cap else None,
+           "kw": clip.get("keywords") if cap else None}
+    d = _clip_dir(job_id, clip)
+    out, kf = d / "horizontal.mp4", d / "horizontal.json"
+    try:
+        if out.exists() and json.loads(kf.read_text(encoding="utf-8")) == key:
+            return out
+    except (OSError, ValueError):
+        pass
+    ass = ""
+    if cap:
+        ass = captions.build_ass(words, clip["start"], clip["end"],
+                                 {**o, "keywords": clip.get("keywords") or [], "title_overlay": False,
+                                  "landscape": True, "captions": True})
+    kf.unlink(missing_ok=True)
+    highlights.horizontal_segment(Path(src["path"]), src, clip["start"], clip["end"], out,
+                                  opts.get("voice_enhance", True), ass)
+    kf.write_text(json.dumps(key), encoding="utf-8")
+    return out
+
+
+def set_outputs(job_id: str, saidas: str) -> None:
+    """Resumo: quais vídeos montar. Vale no próximo Remontar; lances que só têm a versão horizontal ganham a
+    vertical se ela voltar a ser pedida."""
+    if saidas not in SAIDAS:
+        raise ValueError("escolha ambos, vertical ou horizontal")
+    with _lock:
+        job = _jobs.get(job_id)
+        if not job:
+            raise KeyError(job_id)
+        if not _is_recap(job):
+            raise ValueError("isso vale para o resumo da partida")
+        job["options"]["saidas"] = saidas
+        for c in job["clips"]:
+            if saidas != "horizontal" and c.get("formato") == "horizontal":
+                c["dirty"] = True
+        _save(job)
+    _stage(job_id)
+
 
 def _visual_review(job_id: str, backend: str, candidates, transcript, events, style) -> list[dict]:
     job = get(job_id)
@@ -1215,6 +1359,23 @@ def _render_all(job_id: str, words: list[dict]) -> None:
            message=f"{total - failed} clipes prontos" + (f", {failed} com erro" if failed else ""))
 
 
+def _render_horizontal_lance(job_id: str, idx: int, words: list[dict]) -> None:
+    clip = get(job_id)["clips"][idx]
+    _set_clip(job_id, idx, status="rendering", error=None)
+    try:
+        hl = get(job_id).get("highlight") or {}
+        out = _hseg(job_id, clip, words if hl.get("legenda_horizontal") else [])
+        thumb = out.with_name("thumb.jpg")
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{(clip['end'] - clip['start']) / 2:.2f}", "-i", str(out),
+                        "-frames:v", "1", "-vf", "scale=480:-2", str(thumb)], capture_output=True)
+        rel = f"{job_id}/clips/{clip['n']:02d}"
+        _set_clip(job_id, idx, file=f"{rel}/horizontal.mp4", thumb=f"{rel}/thumb.jpg", formato="horizontal",
+                  out_duration=round(clip["end"] - clip["start"], 2), status="done", rev=clip.get("rev", 0) + 1)
+    except Exception as exc:
+        traceback.print_exc()
+        _set_clip(job_id, idx, status="error", error=str(exc))
+
+
 def _set_clip(job_id: str, idx: int, **fields) -> None:
     with _lock:
         _jobs[job_id]["clips"][idx].update(fields)
@@ -1279,6 +1440,9 @@ def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     if job["status"] == "cancelled":  # renderização que estava na fila de um projeto cancelado
         return
     clip = job["clips"][idx]
+    if _is_recap(job) and _saidas(job) == "horizontal":
+        _render_horizontal_lance(job_id, idx, words)
+        return
     _set_clip(job_id, idx, status="rendering", error=None)
     out_dir = _dir(job_id) / "clips" / f"{clip['n']:02d}"
     opts = {**job["options"], **clip.get("overrides", {})}
@@ -1292,14 +1456,14 @@ def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
         info = render.render_clip(Path(job["source"]["path"]), job["source"], clip, out_dir, words, opts,
                                   keep=keep, zooms=zooms)
         _set_clip(job_id, idx, file=f"{job_id}/clips/{clip['n']:02d}/clip.mp4",
-                  thumb=f"{job_id}/clips/{clip['n']:02d}/thumb.jpg", cover_origin="render", **info)
+                  thumb=f"{job_id}/clips/{clip['n']:02d}/thumb.jpg", cover_origin="render", formato="vertical", **info)
         if opts.get("cover_auto", True) or clip.get("cover"):
             try:
                 _make_cover(job_id, idx, words=words, attach=True)
             except Exception as exc:  # sem capa o clipe continua valendo
                 traceback.print_exc()
                 _set_clip(job_id, idx, cover_error=str(exc))
-        _set_clip(job_id, idx, status="done", rev=clip.get("rev", 0) + 1)
+        _set_clip(job_id, idx, status="done", rev=clip.get("rev", 0) + 1, pronto_em=round(time.time()))
     except Exception as exc:
         traceback.print_exc()
         _set_clip(job_id, idx, status="error", error=str(exc))

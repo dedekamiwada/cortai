@@ -8,8 +8,8 @@ Fluxo de um projeto (pasta `_posedit/<id>/`):
   4. render: ffmpeg aplica os beats, trata a voz e exporta COM e SEM trilha (-14 LUFS).
 
 A biblioteca (`_biblioteca/` ao lado dos projetos, ou a pasta escolhida) tem `sfx/`, `emotes/` e
-`musicas/<clima>/`; o usuário coloca ali só arquivos que tem direito de usar. Sem música de um clima,
-`tensao` e `triste` usam uma trilha original gerada (`sintese.py`).
+`musicas/<clima>/`; o usuário coloca ali só arquivos que tem direito de usar. Sem música de um clima, a
+seção fica muda (sons e trilhas sintetizados soavam artificiais e saíram).
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import frames, jobs, media, paths, picker, render, signals, sintese, transcribe
+from . import frames, jobs, media, memes, paths, picker, render, signals, transcribe, trilhas
 
 ROOT = paths.JOBS_DIR / "_posedit"
 CONFIG = ROOT / "config.json"
@@ -74,14 +74,78 @@ def library() -> dict:
     root = library_dir()
     for sub in ("sfx", "emotes", *(f"musicas/{c}" for c in CLIMAS if c != "corte_seco")):
         (root / sub).mkdir(parents=True, exist_ok=True)
-    sintese.ensure_default_sfx(root / "sfx")
+    _retire_generated(root / "sfx")
+    sfx = _files(root / "sfx", AUDIO_EXT)
+    musicas = {c: _files(root / "musicas" / c, AUDIO_EXT) for c in CLIMAS if c != "corte_seco"}
+    present = {f"sfx/{f}" for f in sfx} | {f"musicas/{c}/{f}" for c, fs in musicas.items() for f in fs}
     return {
         "dir": str(root),
-        "sfx": _files(root / "sfx", AUDIO_EXT),
+        "sfx": sfx,
         "emotes": _files(root / "emotes", IMAGE_EXT),
-        "musicas": {c: _files(root / "musicas" / c, AUDIO_EXT) for c in CLIMAS if c != "corte_seco"},
-        "geradas": list(sintese.GENERATED),
+        "musicas": musicas,
+        "geradas": [],  # sem trilha sintetizada: sem música do clima, a seção fica muda
+        "memes": [{**m, "tem": m["arquivo"] in present} for m in memes.CATALOG],
+        "dicas": memes.hints(present),
     }
+
+
+GENERATED_SFX = ("boom", "ding", "impacto", "queda", "riser", "whoosh")
+
+
+def _retire_generated(sfx: Path) -> None:
+    """Os efeitos sintetizados que versões antigas criavam (cortai-*.wav) soavam artificiais: saem da lista,
+    guardados em sfx/_gerados_cortai (nada é apagado; dá para trazer de volta movendo o arquivo)."""
+    old = [sfx / f"cortai-{n}.wav" for n in GENERATED_SFX if (sfx / f"cortai-{n}.wav").exists()]
+    if old:
+        keep = sfx / "_gerados_cortai"
+        keep.mkdir(exist_ok=True)
+        for f in old:
+            f.replace(keep / f.name)
+
+
+def music_suggestions(pid: str) -> dict:
+    """Músicas que dão emoção a cada trecho da trilha do plano (por clima), sem tokens."""
+    p = get(pid)
+    if not p:
+        raise KeyError(pid)
+    climas = [s["clima"] for s in (p.get("plan") or {}).get("trilha", []) if s["clima"] != "corte_seco"]
+    return trilhas.suggest(climas or ["epico", "comico"], library()["musicas"])
+
+
+MAX_IMPORT = {"sfx": 20.0}  # efeito sonoro é curto; música por clima até 3 min
+
+
+def import_clip(url: str, start: float, end: float, folder: str, name: str) -> str:
+    """Baixa só o trecho [start, end] de um link (YouTube, TikTok… via yt-dlp), normaliza o volume e salva na
+    biblioteca. Você escolhe a fonte: guarde só o que tem direito de usar."""
+    import re
+    import tempfile
+
+    url, name = (url or "").strip(), re.sub(r"[^a-z0-9-]+", "-", (name or "").strip().lower()).strip("-")[:60]
+    if not re.match(r"^https?://", url):
+        raise ValueError("cole um link http(s)")
+    if folder not in memes.FOLDERS:
+        raise ValueError("pasta inválida")
+    if not name:
+        raise ValueError("dê um nome ao arquivo")
+    limit = MAX_IMPORT.get(folder, 180.0)
+    if not (0 <= start < end) or end - start > limit:
+        raise ValueError(f"o trecho precisa ter entre 0,1 e {limit:.0f} s")
+    dest = library_dir() / folder / f"{name}.mp3"
+    with tempfile.TemporaryDirectory() as tmp:
+        cmd = [*paths.yt_dlp_command(), "-f", "ba/b", "--no-playlist", "--no-progress",
+               "--download-sections", f"*{start:.2f}-{end:.2f}", "-o", str(Path(tmp) / "trecho.%(ext)s"), url]
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        files = [p for p in Path(tmp).glob("trecho.*") if p.suffix != ".part"]
+        if proc.returncode != 0 or not files:
+            raise ValueError("não consegui baixar esse link: " + (proc.stderr.strip().splitlines() or ["?"])[-1][:200])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        conv = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(files[0]), "-vn", "-t", f"{end - start:.2f}",
+                               "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-c:a", "libmp3lame", "-q:a", "2",
+                               str(dest)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if conv.returncode != 0:
+            raise ValueError("não consegui converter o áudio: " + conv.stderr.strip()[-200:])
+    return f"{folder}/{dest.name}"
 
 
 # ------------------------------------------------------------------ persistência
@@ -268,9 +332,9 @@ acompanha. NUNCA por cima da fala: escolha t numa pausa entre palavras.
 
 Trilha: seções {de, ate, clima}. Climas: tensao (antes do acontecimento, crescendo), corte_seco (a \
 música PARA de repente no acontecimento — seção curta, sem som), triste (depois do fracasso), epico \
-(jogada boa), comico (situação boba). Em `arquivo` use um nome da lista daquele clima ou "" para a \
-trilha gerada (só existe para tensao e triste; sem arquivo nos outros climas a seção fica muda). A \
-trilha abaixa sozinha quando o streamer fala.
+(jogada boa), comico (situação boba). Em `arquivo` use um nome da lista daquele clima, ou "" se não \
+houver (a seção fica muda, mas o clima escolhido vira indicação de música para o streamer). A trilha \
+abaixa sozinha quando o streamer fala.
 
 Regras:
 1. Um efeito visual por momento. Se tudo treme, nada treme. Típico: 4–8 beats em 30 s.
@@ -328,7 +392,8 @@ SCHEMA = {
 def build_prompt(dur: float, words: list[dict], events: list[dict], lib: dict, instructions: str) -> str:
     fala = " ".join(f"{w['w'].strip()}@{w['s']:.2f}" for w in words) or "(sem fala)"
     sinais = "\n".join([signals.legend(events), *(signals.describe(e) for e in events)]) if events else "(nenhum)"
-    musicas = "\n".join(f"- {c}: {', '.join(fs) if fs else '(vazio' + (' → trilha gerada' if c in lib['geradas'] else ' → mudo') + ')'}"
+    dicas = lib.get("dicas", {})  # memes da biblioteca: quando usar cada um (do catálogo)
+    musicas = "\n".join(f"- {c}: {', '.join(f'{f} ({dicas[f]})' if f in dicas else f for f in fs) if fs else '(vazio' + (' → trilha gerada' if c in lib['geradas'] else ' → mudo') + ')'}"
                         for c, fs in lib["musicas"].items())
     extra = f"\n\nPedido do streamer para esta edição: {instructions}" if instructions else ""
     return f"""Duração do clipe: {dur:.2f} s.
@@ -340,7 +405,7 @@ Sinais de áudio (picos e silêncios):
 {sinais}
 
 Biblioteca disponível:
-- sfx: {', '.join(lib['sfx']) or '(vazio)'}
+- sfx: {', '.join(f"{f} ({lib['dicas'][f]})" if f in lib.get('dicas', {}) else f for f in lib['sfx']) or '(vazio)'}
 - emotes: {', '.join(lib['emotes']) or '(vazio — não use emote)'}
 - músicas por clima:
 {musicas}{extra}
@@ -574,12 +639,7 @@ def _render_video(pid: str, plan: dict, meta: dict, out: Path) -> None:
 
 
 def _music_file(pid: str, s: dict) -> Path | None:
-    if s["arquivo"]:
-        return library_dir() / "musicas" / s["clima"] / s["arquivo"]
-    audio = sintese.music(s["clima"], s["ate"] - s["de"] + 0.6)
-    if audio is None:
-        return None
-    return sintese.write_wav(_dir(pid) / f"musica-{s['id']}.wav", audio)
+    return library_dir() / "musicas" / s["clima"] / s["arquivo"] if s["arquivo"] else None
 
 
 def _render_audio(pid: str, plan: dict, meta: dict, sem: Path, com: Path) -> bool:

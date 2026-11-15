@@ -231,7 +231,7 @@ REVIEW_SCHEMA = {
 
 
 def review_prompt(candidates, windows, images, transcript_text_for, extra: str, serie: str = "",
-                  legend: str = "") -> str:
+                  legend: str = "", campanha: str = "") -> str:
     parts = [legend + "\n"] if legend else []
     if extra:
         parts.append(f"Pedido do streamer (prioridade máxima): {extra}\n")
@@ -239,6 +239,8 @@ def review_prompt(candidates, windows, images, transcript_text_for, extra: str, 
         parts.append(f"Bordão desta série (abra o `gancho` com ele, palavra por palavra): \"{serie}\". "
                      "Leia o nome do adversário no HUD/placar e apresente-o logo depois do bordão; ele também vai num card "
                      "\"VS NOME\" na abertura. Feche com o placar final e um \"Quem é o próximo?\".\n")
+        if campanha:
+            parts.append(campanha + "\n")
     for i, (c, (ws, we), img) in enumerate(zip(candidates, windows, images), 1):
         parts.append(f"## Candidato {i} — imagem {img} (quadros de {ws:.1f}s a {we:.1f}s)")
         parts.append(f"Proposta: \"{c.title}\" de {c.start:.2f}s a {c.end:.2f}s, pico em {c.peak or c.start:.2f}s. {c.reason}")

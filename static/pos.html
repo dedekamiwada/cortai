@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí · Pós-edição</title>
-<link rel="stylesheet" href="style.css?v=20261115j">
+<link rel="stylesheet" href="style.css?v=20261115o">
 </head>
 <body>
 <header class="top">
@@ -41,6 +41,23 @@
       <button class="ghost" id="lib-open"><i class="ic ic-folder"></i>Abrir pasta</button>
     </div>
     <p class="muted small" id="lib-summary"></p>
+    <h4>Memes</h4>
+    <p class="muted small">O Cortaí não traz esses áudios (são de terceiros). Com o arquivo na biblioteca, a pós-edição sabe quando usar cada um. Direitos <b>alto</b> = música comercial ou de desenho: o YouTube costuma reivindicar; no TikTok prefira o som do próprio app.</p>
+    <div id="meme-list" class="meme-list"></div>
+    <div class="import-box" id="import-box">
+      <h4>Importar por link</h4>
+      <div class="lib-row">
+        <input id="imp-url" type="url" placeholder="Link do vídeo com o som (YouTube, TikTok…)">
+      </div>
+      <div class="lib-row">
+        <label class="inline-field">Início <input id="imp-start" class="time-in" type="text" placeholder="00:00:00.0"></label>
+        <label class="inline-field">Fim <input id="imp-end" class="time-in" type="text" placeholder="00:00:02.0"></label>
+        <label class="inline-field">Pasta <select id="imp-folder"><option value="sfx">sfx (efeito, até 20 s)</option><option value="musicas/comico">música: cômico</option><option value="musicas/epico">música: épico</option><option value="musicas/tensao">música: tensão</option><option value="musicas/triste">música: triste</option></select></label>
+        <label class="inline-field">Nome <input id="imp-name" type="text" maxlength="60" placeholder="meme-fahh"></label>
+        <button class="secondary" id="imp-go"><i class="ic ic-download"></i>Importar trecho</button>
+      </div>
+      <p class="muted small" id="imp-msg"></p>
+    </div>
   </section>
 
   <div class="section-head"><h2>Pós-edições</h2></div>
@@ -71,6 +88,7 @@
         <tbody id="trilha"></tbody>
       </table>
       <p class="muted small" id="fim-note"></p>
+      <div class="music-sug" id="music-sug"></div>
       <div class="pos-actions">
         <button class="primary" id="render-btn"><i class="ic ic-play"></i>Renderizar</button>
         <input id="replan-text" type="text" placeholder="Pedir outro plano: ex. menos efeitos, mais tensão no começo">
@@ -94,6 +112,6 @@
   </article>
 </template>
 
-<script src="pos.js?v=20261115j"></script>
+<script src="pos.js?v=20261115o"></script>
 </body>
 </html>

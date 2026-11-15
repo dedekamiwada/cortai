@@ -49,6 +49,19 @@ def config():
     }
 
 
+@app.get("/api/serie")
+def series():
+    return jobs.series_info()
+
+
+@app.post("/api/serie")
+async def series_goal(request: Request):
+    from . import serie
+
+    serie.set_goal(jobs.JOBS_DIR, (await request.json()).get("meta", ""))
+    return jobs.series_info()
+
+
 @app.post("/api/settings")
 async def save_settings(request: Request):
     return jobs.save_defaults(await request.json())
@@ -304,6 +317,16 @@ async def match_preview(job_id: str):
     return await run_in_threadpool(jobs.match_preview, job_id)
 
 
+@app.post("/api/jobs/{job_id}/resumo/saidas")
+async def recap_outputs(job_id: str, request: Request):
+    _job_or_404(job_id)
+    try:
+        jobs.set_outputs(job_id, (await request.json()).get("saidas") or "")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
 @app.get("/api/jobs/{job_id}/resumo/legendas")
 def recap_captions(job_id: str):
     _job_or_404(job_id)
@@ -347,6 +370,15 @@ async def redo_clip(job_id: str, n: int, request: Request):
     except (ValueError, KeyError) as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/antigos")
+async def old_clips(job_id: str, request: Request):
+    _job_or_404(job_id)
+    try:
+        return {"cortes": await run_in_threadpool(jobs.match_old_clips, job_id, (await request.json()).get("pasta", ""))}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.post("/api/jobs/{job_id}/cancelar")
@@ -519,6 +551,17 @@ async def pos_set_library(request: Request):
         raise HTTPException(400, str(exc))
 
 
+@app.post("/api/pos/biblioteca/importar")
+async def pos_import(request: Request):
+    body = await request.json()
+    try:
+        saved = await run_in_threadpool(posedit.import_clip, body.get("url", ""), float(body.get("inicio") or 0),
+                                        float(body.get("fim") or 0), body.get("pasta", "sfx"), body.get("nome", ""))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"arquivo": saved}
+
+
 @app.post("/api/pos/biblioteca/abrir")
 def pos_open_library():
     posedit.open_library_folder()
@@ -546,6 +589,12 @@ def pos_source(pid: str):
     if not path.is_file():
         raise HTTPException(404, "vídeo original indisponível")
     return FileResponse(path)
+
+
+@app.get("/api/pos/{pid}/musicas")
+def pos_music(pid: str):
+    _pos_or_404(pid)
+    return posedit.music_suggestions(pid)
 
 
 @app.post("/api/pos/{pid}/render")

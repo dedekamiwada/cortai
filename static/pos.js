@@ -69,14 +69,69 @@ async function loadList() {
   if (items.some((p) => BUSY.has(p.status)) && !current) timer = setTimeout(loadList, 3000);
 }
 
+// vindo de "Importar…" de uma indicação: preenche o formulário de importação
+function prefillImport() {
+  const q = new URLSearchParams(location.search);
+  const alvo = q.get("importar");
+  if (!alvo) return;
+  const parts = alvo.split("/");
+  $("#imp-folder").value = parts.slice(0, -1).join("/");
+  $("#imp-name").value = parts[parts.length - 1].replace(/\.[^.]+$/, "");
+  $("#imp-msg").textContent = `Procure "${q.get("buscar") || ""}" no YouTube, cole o link e marque o trecho que quer usar.`;
+  $("#import-box").scrollIntoView({ block: "center" });
+  $("#imp-url").focus();
+}
+
 async function loadLibrary() {
   try {
     const lib = await api("/api/pos/biblioteca");
     $("#lib-dir").value = lib.dir;
     const mus = Object.entries(lib.musicas).map(([c, f]) => `${CLIMAS[c]} ${f.length}`).join(", ");
     $("#lib-summary").textContent = `${lib.sfx.length} efeitos sonoros · ${lib.emotes.length} emotes · músicas: ${mus}`;
+    renderMemes(lib);
+    prefillImport();
   } catch (ex) { $("#lib-summary").textContent = ex.message; }
 }
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// tempo HH:MM:SS(.d), MM:SS ou segundos → segundos (NaN se inválido)
+const parseHms = (v) => {
+  v = String(v || "").trim().replace(",", ".");
+  if (!/^\d+(\.\d+)?(:\d{1,2}(\.\d+)?){0,2}$/.test(v)) return NaN;
+  return v.split(":").map(parseFloat).reduce((a, p) => a * 60 + p, 0);
+};
+function renderMemes(lib) {
+  $("#meme-list").innerHTML = (lib.memes || []).map((m) => `
+    <div class="meme ${m.tem ? "ok" : ""}">
+      <div><b>${esc(m.nome)}</b> <span class="chip ${m.direitos === "alto" ? "warn" : ""}">direitos ${esc(m.direitos)}</span>
+        ${m.tem ? `<span class="chip accent">na biblioteca</span>` : ""}</div>
+      <div class="muted small">${esc(m.uso)}</div>
+      <div class="muted small">${esc(m.origem)} · arquivo <code>${esc(m.arquivo)}</code></div>
+      ${m.tem ? "" : `<button class="ghost small" data-meme="${esc(m.id)}">Importar este…</button>`}
+    </div>`).join("");
+  $$("#meme-list [data-meme]").forEach((b) => (b.onclick = () => {
+    const m = lib.memes.find((x) => x.id === b.dataset.meme);
+    const parts = m.arquivo.split("/");
+    $("#imp-folder").value = parts.slice(0, -1).join("/");
+    $("#imp-name").value = parts[parts.length - 1].replace(/\.[^.]+$/, "");
+    $("#imp-msg").textContent = `Procure "${m.buscar}" no YouTube ou no TikTok, cole o link e marque o trecho do som.`;
+    $("#import-box").scrollIntoView({ behavior: "smooth", block: "center" });
+    $("#imp-url").focus();
+  }));
+}
+$("#imp-go").onclick = async () => {
+  const inicio = parseHms($("#imp-start").value), fim = parseHms($("#imp-end").value);
+  if (isNaN(inicio) || isNaN(fim)) return ($("#imp-msg").textContent = "Use o formato HH:MM:SS (ex.: 00:00:03.5).");
+  $("#imp-go").disabled = true;
+  $("#imp-msg").textContent = "Baixando só o trecho e ajustando o volume…";
+  try {
+    const r = await postJSON("/api/pos/biblioteca/importar", { url: $("#imp-url").value, inicio, fim,
+      pasta: $("#imp-folder").value, nome: $("#imp-name").value });
+    $("#imp-msg").textContent = `Salvo em ${r.arquivo}.`;
+    loadLibrary();
+  } catch (ex) { $("#imp-msg").textContent = ex.message; }
+  finally { $("#imp-go").disabled = false; }
+};
 $("#lib-save").onclick = async () => {
   try { await postJSON("/api/pos/biblioteca", { dir: $("#lib-dir").value }); loadLibrary(); }
   catch (ex) { alert(ex.message); }
@@ -159,7 +214,7 @@ function renderPlan(plan) {
     const tr = document.createElement("tr");
     tr.dataset.id = s.id;
     tr.className = s.on ? "" : "off";
-    const fonte = s.fonte === "gerada" ? "trilha original gerada" : s.fonte === "mudo" ? "sem música na biblioteca (mudo)" : s.arquivo || "";
+    const fonte = s.fonte === "mudo" ? "sem música deste clima na biblioteca (veja as indicações abaixo)" : s.arquivo || "";
     tr.innerHTML = `<td><input type="checkbox"></td><td>${sec(s.de)} → ${sec(s.ate)}</td><td><b></b></td><td class="muted small"></td>`;
     const box = $("input", tr);
     box.checked = s.on;
@@ -169,6 +224,24 @@ function renderPlan(plan) {
     return tr;
   }));
   $("#fim-note").textContent = `O vídeo termina em ${sec(plan.fim)}.`;
+  loadMusicSuggestions();
+}
+
+// músicas que dão emoção a cada trecho da trilha (indicação; o arquivo entra pelo "Importar por link")
+async function loadMusicSuggestions() {
+  if (!current) return;
+  let sug;
+  try { sug = await api(`/api/pos/${current.id}/musicas`); } catch { return; }
+  const NOMES = { epico: "Jogada boa / virada", comico: "Falha / caos", triste: "Derrota", tensao: "Antes do lance" };
+  $("#music-sug").innerHTML = `<h4>Música para esta jogada</h4>` + Object.entries(sug).map(([clima, items]) => `
+    <div class="sug-group"><b>${esc(NOMES[clima] || clima)}</b>
+      <ul>${items.map((s) => `<li>
+        <span><b>${esc(s.titulo)}</b> — ${esc(s.artista)}</span>
+        <span class="chip ${s.licenca === "livre" ? "accent" : "warn"}" title="${s.licenca === "livre" ? "Kevin MacLeod, CC BY 4.0: use com crédito" : "no TikTok/Reels use o som do app; no YouTube costuma ser reivindicada"}">${s.licenca === "livre" ? "livre (crédito)" : "comercial"}</span>
+        <span class="muted small">${esc(s.momento)} · ${esc(s.como)}</span>
+        ${s.na_biblioteca ? `<span class="chip">na biblioteca</span>`
+          : `<a class="ghost small" href="pos.html?importar=${encodeURIComponent(s.arquivo_sugerido)}&buscar=${encodeURIComponent(s.buscar)}">Importar…</a>`}
+      </li>`).join("")}</ul></div>`).join("");
 }
 
 function renderResults(p) {

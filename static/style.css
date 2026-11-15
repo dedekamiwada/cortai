@@ -499,12 +499,21 @@ button.small, .ghost.small, .secondary.small, .primary.small { min-height: 30px;
 /* ---------------------------------------------------------------- resumo da partida / partidas */
 .hl-panel { margin-bottom: 20px; }
 .hl-panel h2 { margin-top: 0; }
-.hl-outs { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; margin: 16px 0 22px; }
-.hl-out { display: flex; flex-direction: column; gap: 10px; width: 260px; }
-.hl-out.wide { width: min(560px, 100%); }
-.hl-out video { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: var(--radius); }
-.hl-out.wide video { aspect-ratio: 16 / 9; }
-.hl-out .actions { padding-top: 0; }
+/* saídas do resumo lado a lado, como dois monitores: mesma altura de imagem e botões alinhados embaixo
+   (antes cada uma tinha a altura do próprio vídeo e os botões do horizontal ficavam soltos no meio) */
+.hl-outs { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 5fr); gap: 12px; align-items: stretch; margin: 4px 0 18px; }
+.hl-outs.one { grid-template-columns: minmax(0, 1fr); }
+.hl-out { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 8px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--panel-2); }
+.hl-out video { width: 100%; height: clamp(240px, 52vh, 460px); object-fit: contain; background: #000; border-radius: var(--radius-sm); }
+.hl-out .actions { margin-top: auto; padding-top: 0; flex-wrap: wrap; }
+.inline-field { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.inline-field select { width: auto; min-height: 32px; }
+@media (max-width: 760px) {
+  .hl-outs { grid-template-columns: minmax(0, 1fr); }
+  .hl-out video { height: auto; aspect-ratio: 9 / 16; max-height: 70vh; }
+  .hl-out.wide video { aspect-ratio: 16 / 9; }
+}
 .hl-out .actions a { min-height: 32px; font-size: 13px; padding: 0 12px; }
 .hl-script-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .hl-script-head h2, .hl-script-head h4 { margin: 0; flex: 1; }
@@ -826,3 +835,39 @@ kbd { font: 600 11px/1 var(--mono); padding: 3px 6px; border-radius: 5px; backgr
   .hlc-line { grid-template-columns: 1fr; gap: 2px; }
   .tlx-hint, .tlx-scale { display: none; }
 }
+
+/* biblioteca: memes e importação por link */
+.meme-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0 20px; margin: 8px 0 16px; }
+.meme { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.meme.ok b { color: var(--text); }
+.meme button { align-self: flex-start; margin-top: 4px; }
+.import-box { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.import-box .lib-row { flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.import-box #imp-url { flex: 1 1 100%; }
+.import-box .time-in { width: 9em; }
+
+/* cortes antigos */
+.antigos-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.antigos-list li { display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 2fr); gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
+.antigos-list li.ok b { color: var(--text); }
+.antigos-list b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tlx-seg.old { background: var(--info); border-color: var(--info); top: 0; height: 6px; }
+.tlx-over-items i.old { background: var(--info); height: 4px; top: 2px; }
+@media (max-width: 760px) { .antigos-list li { grid-template-columns: 1fr; gap: 2px; } }
+
+/* série */
+.serie { margin-bottom: 18px; }
+.serie h2 { font-size: 15px; }
+.serie-rec { font-size: 14px; color: var(--text); }
+.serie-eps { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.serie-eps th { text-align: left; font: 600 11px var(--font); text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  padding: 6px 8px; border-bottom: 1px solid var(--line-strong); }
+.serie-eps td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.serie-eps .res.vitoria { color: var(--info); } .serie-eps .res.derrota { color: var(--danger); }
+
+/* pós-edição: indicações de música por trecho */
+.music-sug { margin: 14px 0; }
+.sug-group { margin-bottom: 10px; }
+.sug-group ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.sug-group li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.sug-group li .muted { flex-basis: 100%; }

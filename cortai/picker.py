@@ -540,8 +540,12 @@ def snap_clips(clips: list[Clip], words: list[dict], duration: float, min_len: f
             # só encaixa no começo de uma palavra se ela estiver perto: em corte de jogo o início
             # pode ser de propósito num momento sem fala
             near = [w for w in words if abs(w["s"] - start) <= 0.6]
-            if near:
-                start = max(0.0, min(near, key=lambda w: abs(w["s"] - start))["s"] - 0.12)
+            inside = [w for w in words if w["s"] < start < w["e"]]
+            if near or inside:
+                ws = (inside[0] if inside else min(near, key=lambda w: abs(w["s"] - start)))["s"]
+                # folga de 0,12 s antes da palavra, sem entrar na palavra anterior (antes cortava o fim dela)
+                prev_end = max((w["e"] for w in words if w["s"] < ws and w["e"] > ws - 0.12), default=0.0)
+                start = max(0.0, ws - 0.12, min(prev_end, ws))
             cut = [w for w in words if start < w["s"] < end < w["e"]]  # palavra cortada no fim
             if cut:
                 end = cut[0]["e"]
@@ -551,7 +555,9 @@ def snap_clips(clips: list[Clip], words: list[dict], duration: float, min_len: f
                 fit = [w for w in words if w["s"] >= start and w["e"] <= end]
                 if fit and end - fit[-1]["e"] < 1.5:
                     end = fit[-1]["e"]
-        end = min(duration, end + 0.2)
+        # folga de 0,2 s no fim, sem pegar o começo da palavra seguinte
+        next_start = min((w["s"] for w in words if end <= w["s"] < end + 0.2), default=end + 0.2) if words else end + 0.2
+        end = min(duration, max(end, next_start - 0.02))
         if end - start < min_len * 0.6:
             continue
         if any(start < o["end"] and end > o["start"] for o in out):

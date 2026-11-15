@@ -218,7 +218,7 @@ $("#job-form").addEventListener("submit", async (e) => {
     num_clips: +f.num_clips.value, min_len: +f.min_len.value, max_len: +f.max_len.value,
     instructions: f.instructions.value, content_type: f.content_type.value, style_id: f.style_id.value,
     visual_review: f.visual_review.checked, layout: f.layout.value,
-    mode: f.mode.value, highlight_basis: f.highlight_basis.value,
+    mode: f.mode.value, highlight_basis: f.highlight_basis.value, saidas: f.saidas.value,
     serie: f.serie.value.trim(), serie_n: f.serie_n.value ? +f.serie_n.value : null,
     range_start: rs, range_end: re_,
     language: f.language.value, backend: f.backend.value, whisper_model: f.whisper_model.value,
@@ -284,7 +284,32 @@ function uploadFile(file, onProgress) {
 }
 
 // ---------------------------------------------------------------- lista
+// ---- série do resumo narrado: campanha, meta e episódios
+async function loadSerie() {
+  let s;
+  try { s = await api("/api/serie"); } catch { return; }
+  const card = $("#serie");
+  card.classList.toggle("hidden", !s.bordao);
+  if (!s.bordao) return;
+  $("#serie-bordao").textContent = s.bordao.replace("{n}", "N");
+  const c = s.campanha;
+  $("#serie-rec").textContent = c.episodios ? `${c.vitorias}V ${c.derrotas}D · ${c.episodios} episódio${c.episodios > 1 ? "s" : ""}` : "";
+  if (document.activeElement !== $("#serie-meta")) $("#serie-meta").value = s.meta || "";
+  $("#serie-next").textContent = `Próximo episódio: ${s.proximo}`;
+  const RES = { vitoria: "Vitória", derrota: "Derrota", empate: "Empate", desconhecido: "—" };
+  $("#serie-eps").innerHTML = s.episodios.slice().reverse().map((e) => `<tr>
+    <td class="tc">${e.n}</td><td class="tc">${new Date(e.data * 1000).toLocaleDateString("pt-BR")}</td>
+    <td>${e.existe ? `<a href="#/job/${encodeURIComponent(e.job)}">${escapeHtml(e.adversario || "—")}</a>` : escapeHtml(e.adversario || "—")}</td>
+    <td class="tc">${escapeHtml(e.placar || "—")}</td><td class="res ${e.resultado}">${RES[e.resultado] || "—"}</td></tr>`).join("");
+  $(".serie-eps").classList.toggle("hidden", !s.episodios.length);
+  $("#serie-empty").classList.toggle("hidden", !!s.episodios.length);
+}
+$("#serie-meta-save").onclick = async () => {
+  try { await postJSON("/api/serie", { meta: $("#serie-meta").value }); loadSerie(); } catch (ex) { alert(ex.message); }
+};
+
 async function loadJobs() {
+  loadSerie();
   const list = $("#job-list");
   const items = await api("/api/jobs");
   if (!items.length) { list.innerHTML = `<p class="empty">Nenhum projeto ainda.</p>`; return; }
@@ -328,6 +353,7 @@ function renderJob(job) {
   $("#covers-btn").classList.toggle("hidden", !job.clips.some((c) => c.status === "done" && !c.cover));
   renderMatches(job);
   renderQuality(job);
+  if (!$("#antigos-list").children.length && job.antigos) renderOldClips(job.antigos);
   renderAlts(job);
   renderTimeline(job);
   renderHighlight(job);
@@ -465,6 +491,27 @@ $("#apply-btn").onclick = async () => {
   }
 };
 
+// ---- cortes antigos feitos à mão: onde cada um está na live (exemplos do gosto do streamer)
+function renderOldClips(list) {
+  $("#antigos-list").innerHTML = (list || []).map((a) => `<li class="${a.ok ? "ok" : ""}"><b>${escapeHtml(a.arquivo)}</b>
+    <span class="tc">${a.ok ? `${fmtTime(a.start)} → ${fmtTime(a.end)}` : "—"}</span>
+    <span class="muted small">${a.ok ? `achado (${escapeHtml(a.por || "")})` : a.erro ? escapeHtml(a.erro) : "não está nesta live (ou editado demais para casar com segurança)"}</span></li>`).join("");
+}
+$("#antigos-go").onclick = async () => {
+  const btn = $("#antigos-go");
+  btn.disabled = true;
+  $("#antigos-msg").textContent = "Comparando o som de cada corte com a live…";
+  try {
+    const r = await postJSON(`/api/jobs/${currentJob.id}/antigos`, { pasta: $("#antigos-dir").value });
+    const ok = r.cortes.filter((a) => a.ok).length;
+    $("#antigos-msg").textContent = `${ok} de ${r.cortes.length} achados nesta live. Os achados viram exemplo nas próximas escolhas e aparecem na linha do tempo.`;
+    renderOldClips(r.cortes);
+    tlCache.key = null;
+    openJob(currentJob.id);
+  } catch (ex) { $("#antigos-msg").textContent = ex.message; }
+  finally { btn.disabled = false; }
+};
+
 // ---- qualidade do projeto (métricas antes de postar)
 const MOTIVOS = { punchline: "cortou o punchline", contexto: "sem contexto", momento: "momento errado", morto: "tempo morto", outro: "outro" };
 let qCache = { key: null, q: null };
@@ -488,6 +535,10 @@ async function renderQuality(job) {
     ["Segundos até o lance", q.segundos_ate_lance ?? "—", "mediana; o contexto antes do lance fica entre 3 e 12 s"],
     ["Partidas diferentes", q.partidas ?? "—", "variedade: no máximo 2 cortes por partida"],
     ["Duração média", `${q.duracao_media_s} s`, q.pausas_removidas_s ? `${q.pausas_removidas_s} s de pausas removidas` : "sem remoção de pausas"],
+    ["Bordas cortando palavra", q.borda_em_palavra ?? "—", "meta: 0 (início ou fim no meio de uma palavra soa errado)"],
+    ["Silêncio que sobrou", q.silencio_pct == null ? "—" : `${q.silencio_pct}%`, "média do tempo muito abaixo da sua fala, depois do corte de pausas"],
+    ["Tipos de momento", q.tipos ? q.tipos.length : "—", q.tipos ? q.tipos.map((k) => ({ gol_nosso: "gol", gol_deles: "gol sofrido", reacao: "reação", fala: "fala" }[k] || k)).join(" · ") : ""],
+    ["Primeiro clipe pronto", q.primeiro_pronto_s == null ? "—" : fmtTime(q.primeiro_pronto_s), "desde que o projeto foi criado"],
   ];
   $("#q-grid").innerHTML = tiles.map(([t, v, s]) =>
     `<div class="q-tile"><span class="muted small">${escapeHtml(t)}</span><b>${escapeHtml(String(v))}</b><span class="muted small">${escapeHtml(s)}</span></div>`).join("");
@@ -555,12 +606,16 @@ async function renderTimeline(job) {
       },
       onMarker: (m, ev) => (m.pop ? openTlPop(ev, m.pop) : null),
       onSelect: (n) => {
+        if (String(n).startsWith("old")) return;  // corte antigo: só referência
         const list = $$("#clips .clip"), el = list.find((x) => x.dataset.key === String(n));
         if (el) focusClip(list.indexOf(el));
       },
     });
   }
-  const segments = t.cortes.map((c) => ({ id: c.n, s: c.start, e: c.end, cls: "cut", label: `${c.n}. ${c.title}` }));
+  const segments = [
+    ...(t.antigos || []).map((a, i) => ({ id: `old${i}`, s: a.start, e: a.end, cls: "old", label: `seu corte: ${a.arquivo}` })),
+    ...t.cortes.map((c) => ({ id: c.n, s: c.start, e: c.end, cls: "cut", label: `${c.n}. ${c.title}` })),
+  ];
   const markers = [
     ...t.partidas.map((s) => ({ t: s, cls: "match", title: "Começo de partida" })),
     ...t.reacoes.map((r) => ({ t: r.t, cls: "reacao", title: `Reação forte (z=${r.z})`,
@@ -729,8 +784,15 @@ async function renderHighlight(job) {
   $("#hl-ask-btn").disabled = busy;
   $("#hl-ask-reply").textContent = hl.pedido ? `Último pedido: “${hl.pedido.instrucao}” — ${hl.pedido.resposta}` : "";
   $("#hl-post").textContent = hl.post || "";
+  const saidas = job.options.saidas || "ambos";
+  if (document.activeElement !== $("#hl-saidas")) $("#hl-saidas").value = saidas;
+  $("#hl-saidas").disabled = busy;
+  $("#hl-saidas-note").textContent = saidas === "horizontal"
+    ? "Os lances não são renderizados na vertical: a montagem fica bem mais rápida." : "";
   if (!$("#hl-tabs [aria-selected=true]")) showHlTab(hlTab);
-  for (const el of $$(".hl-out", panel)) {
+  const outs = $$(".hl-out", panel);
+  $(".hl-outs", panel).classList.toggle("one", outs.filter((el) => hl[el.dataset.key]).length < 2);
+  for (const el of outs) {
     const v = hl[el.dataset.key];
     el.classList.toggle("hidden", !v);
     if (!v) continue;
@@ -750,6 +812,10 @@ async function renderHighlight(job) {
   showScript();
   if (hlTab === "legendas") loadRecapCaptions(job);
 }
+$("#hl-saidas").onchange = async (e) => {
+  try { await postJSON(`/api/jobs/${currentJob.id}/resumo/saidas`, { saidas: e.target.value }); openJob(currentJob.id); }
+  catch (ex) { alert(ex.message); e.target.value = currentJob.options.saidas || "ambos"; }
+};
 $("#hl-remount").onclick = async () => {
   try { await postJSON(`/api/jobs/${currentJob.id}/compile`, {}); openJob(currentJob.id); }
   catch (ex) { alert(ex.message); }

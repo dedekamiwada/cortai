@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí</title>
-<link rel="stylesheet" href="style.css?v=20261115j">
+<link rel="stylesheet" href="style.css?v=20261115o">
 </head>
 <body>
 <header class="top">
@@ -52,6 +52,9 @@
             <option value="clips">Vários cortes</option>
             <option value="highlights">Resumo narrado da partida (1 vídeo)</option>
           </select>
+        </label>
+        <label class="field hl-only hidden"><span>Gerar</span>
+          <select name="saidas"><option value="ambos">Vertical e horizontal</option><option value="vertical">Só o short vertical</option><option value="horizontal">Só o horizontal</option></select>
         </label>
         <label class="field hl-only hidden"><span>Escolher os lances pela</span>
           <select name="highlight_basis">
@@ -148,6 +151,19 @@
   </section>
 
   <section>
+    <section id="serie" class="card serie hidden">
+      <div class="hl-head">
+        <h2>Série: <span id="serie-bordao"></span></h2>
+        <span class="serie-rec tc" id="serie-rec"></span>
+      </div>
+      <div class="tab-row">
+        <label class="inline-field">Meta <input id="serie-meta" type="text" maxlength="120" placeholder="Ex.: pegar Champion"></label>
+        <button class="ghost small" id="serie-meta-save">Guardar meta</button>
+        <span class="muted small" id="serie-next"></span>
+      </div>
+      <table class="serie-eps"><thead><tr><th>Ep.</th><th>Data</th><th>Adversário</th><th>Placar</th><th>Resultado</th></tr></thead><tbody id="serie-eps"></tbody></table>
+      <p class="muted small" id="serie-empty">Os episódios entram aqui quando cada resumo da série fica pronto. O roteiro do próximo cita a campanha.</p>
+    </section>
     <div class="section-head"><h2>Projetos</h2></div>
     <div id="job-list" class="job-list"></div>
   </section>
@@ -214,6 +230,10 @@
     </nav>
 
     <div class="tab-page" data-tab="videos">
+      <div class="tab-row">
+        <label class="inline-field">Gerar <select id="hl-saidas"><option value="ambos">Vertical e horizontal</option><option value="vertical">Só o short vertical</option><option value="horizontal">Só o horizontal</option></select></label>
+        <span class="muted small" id="hl-saidas-note"></span>
+      </div>
       <p class="muted small" id="hl-post"></p>
       <div class="hl-outs">
         <article class="hl-out" data-key="vertical">
@@ -283,6 +303,7 @@
 
   <div id="job-tools" class="job-tools hidden">
     <button class="secondary" data-panel="create-panel"><i class="ic ic-plus"></i>Criar clipe</button>
+    <button class="secondary" data-panel="antigos-panel"><i class="ic ic-folder"></i>Cortes antigos</button>
     <button class="secondary" data-panel="apply-panel"><i class="ic ic-palette"></i>Estilo de todos</button>
     <button class="secondary" data-panel="reselect"><i class="ic ic-refresh"></i>Pedir outros cortes</button>
     <button class="secondary" id="map-btn" title="O Claude separa a live por partida (início, fim, placar e resultado)"><i class="ic ic-map"></i>Separar por partida</button>
@@ -295,6 +316,17 @@
     <h3>Pedir outros cortes ao Claude</h3>
     <textarea id="reselect-instructions" rows="2" placeholder="Ex.: agora só momentos de raiva/rage"></textarea>
     <button class="secondary" id="reselect-btn">Pedir novos cortes</button>
+  </section>
+
+  <section id="antigos-panel" class="card panel hidden">
+    <h3>Seus cortes antigos desta live</h3>
+    <p class="muted small">Aponte a pasta com cortes que você já fez à mão desta live. O Cortaí acha de que trecho cada um saiu (pelo som, sem IA) e usa os achados como exemplo do seu gosto nas próximas escolhas.</p>
+    <div class="tab-row">
+      <input id="antigos-dir" type="text" placeholder="C:\Users\voce\Videos\cortes da live">
+      <button class="secondary" id="antigos-go">Procurar nesta live</button>
+    </div>
+    <p class="muted small" id="antigos-msg"></p>
+    <ol class="antigos-list" id="antigos-list"></ol>
   </section>
 
   <section id="create-panel" class="card panel hidden">
@@ -653,7 +685,7 @@
   </div>
 </dialog>
 
-<script src="timeline.js?v=20261115j"></script>
-<script src="app.js?v=20261115j"></script>
+<script src="timeline.js?v=20261115o"></script>
+<script src="app.js?v=20261115o"></script>
 </body>
 </html>
