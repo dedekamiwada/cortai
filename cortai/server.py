@@ -11,12 +11,13 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import autocaptions, capa, captions, fx, jobs, paths, picker, posedit, proc, studio, studio_render, styles
+from . import autocaptions, capa, captions, fx, jobs, paths, picker, posedit, proc, promo, studio, studio_render, styles
 
 proc.install()  # registra os processos de cada projeto para o botão Cancelar
 app = FastAPI(title="Cortaí")
 jobs.load_existing()
 posedit.load_existing()
+promo.load_existing()
 
 
 def _opts(raw: str) -> dict:
@@ -870,6 +871,89 @@ async def studio_export(pid: str, request: Request):
     body = await request.json()
     studio.mutate(pid, lambda pr: pr.__setitem__("export", {"status": "running", "progress": 0.0}))
     studio._worker.submit(studio_render.export, pid, body)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ chamada para a live
+def _promo_or_404(pid: str) -> dict:
+    p = promo.get(pid)
+    if not p:
+        raise HTTPException(404, "chamada não encontrada")
+    return p
+
+
+@app.get("/api/promo")
+def promo_list():
+    return promo.list_all()
+
+
+@app.post("/api/promo")
+async def promo_create(request: Request):
+    return promo.create((await request.json()).get("name") or "")
+
+
+@app.get("/api/promo/{pid}")
+def promo_get(pid: str):
+    p = _promo_or_404(pid)
+    words, dur, selo = promo.timeline(p)
+    return {**p, "linha": {"palavras": words, "duracao": round(dur, 2), "selo_t": round(selo, 2)}}
+
+
+@app.post("/api/promo/{pid}")
+async def promo_update(pid: str, request: Request):
+    _promo_or_404(pid)
+    try:
+        promo.update(pid, await request.json())
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+    return promo_get(pid)
+
+
+@app.delete("/api/promo/{pid}")
+def promo_delete(pid: str):
+    _promo_or_404(pid)
+    promo.delete(pid)
+    return {"ok": True}
+
+
+@app.post("/api/promo/{pid}/arquivo")
+async def promo_attach(pid: str, request: Request):
+    """Liga um arquivo enviado por /api/uploads à chamada: fundo, avatar ou voz (a voz é transcrita)."""
+    _promo_or_404(pid)
+    body = await request.json()
+    path = UPLOADS / Path(body.get("upload_id") or "").name
+    if not path.is_file():
+        raise HTTPException(400, "upload não encontrado")
+    try:
+        await run_in_threadpool(promo.attach, pid, body.get("tipo") or "", path)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+    return promo_get(pid)
+
+
+@app.post("/api/promo/{pid}/voz/remover")
+def promo_voice_remove(pid: str):
+    _promo_or_404(pid)
+    promo.remove_voice(pid)
+    return promo_get(pid)
+
+
+@app.get("/api/promo/{pid}/previa")
+async def promo_preview(pid: str):
+    _promo_or_404(pid)
+    try:
+        return await run_in_threadpool(promo.preview_bg, pid)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/promo/{pid}/gerar")
+def promo_render(pid: str):
+    _promo_or_404(pid)
+    try:
+        promo.start_render(pid)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     return {"ok": True}
 
 

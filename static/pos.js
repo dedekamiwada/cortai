@@ -51,9 +51,25 @@ document.addEventListener("click", (e) => {
 });
 
 // ---------------------------------------------------------------- início
+// ---- abas
+let posCount = 0;
+const posHomeTabs = makeTabs($("#pos-home-tabs"), [
+  { id: "nova", label: "Nova pós-edição", els: () => [$("#ph-nova")] },
+  { id: "projetos", label: "Pós-edições", els: () => [$("#pos-list")], count: () => posCount },
+  { id: "biblioteca", label: "Biblioteca", els: () => [$("#ph-lib")] },
+], "cortai.posHomeTab");
+const posTabs = makeTabs($("#pos-tabs"), [
+  { id: "efeitos", label: "Efeitos", els: () => [$("#pt-efeitos")], visible: () => !!current?.plan,
+    count: () => current?.plan?.beats.length || 0 },
+  { id: "som", label: "Som e trilha", els: () => [$("#pt-som")], visible: () => !!current?.plan },
+  { id: "resultado", label: "Resultado e capa", els: () => [$("#results")], visible: () => !!current?.result && current.status === "done" },
+], "cortai.posTab");
+
 async function loadList() {
   const list = $("#pos-list");
   const items = await api("/api/pos");
+  posCount = items.length;
+  posHomeTabs.refresh();
   if (!items.length) { list.innerHTML = `<p class="empty">Nenhuma pós-edição ainda.</p>`; return; }
   list.replaceChildren(...items.map((p) => {
     const el = document.createElement("button");
@@ -178,6 +194,7 @@ function renderProject(p, first) {
   const res = p.result;
   $("#results").classList.toggle("hidden", !res || p.status !== "done");
   if (res && p.status === "done") renderResults(p);
+  posTabs.refresh();
 }
 
 function renderPlan(plan) {

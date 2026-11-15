@@ -4,22 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí</title>
-<link rel="stylesheet" href="style.css?v=20261116b">
+<link rel="stylesheet" href="style.css?v=20261116d">
 </head>
 <body>
 <header class="top">
   <a href="#" class="brand" data-nav="home">Cortaí</a>
-  <nav class="nav"><a href="index.html" class="on"><i class="ic ic-scissors"></i>Cortes</a><a href="pos.html"><i class="ic ic-music"></i>Pós-edição</a><a href="studio.html"><i class="ic ic-film"></i>Estúdio</a></nav>
+  <nav class="nav"><a href="index.html" class="on"><i class="ic ic-scissors"></i>Cortes</a><a href="pos.html"><i class="ic ic-music"></i>Pós-edição</a><a href="promo.html"><i class="ic ic-send"></i>Chamar pra live</a><a href="studio.html"><i class="ic ic-film"></i>Estúdio</a></nav>
   <span id="ai-status" class="ai-status"></span>
 </header>
 
 <main id="home" class="view">
   <div class="page-head">
     <div>
-      <h1>Novo projeto</h1>
+      <h1>Cortes</h1>
       <p>Jogue uma live, um VOD ou um podcast: o Claude assiste, escolhe os momentos e entrega os cortes prontos.</p>
     </div>
   </div>
+  <nav class="tabs page-tabs" id="home-tabs" role="tablist"></nav>
   <section class="card new-job">
     <div class="tabs" role="tablist">
       <button class="tab active" data-src="url"><i class="ic ic-link"></i>Link</button>
@@ -150,8 +151,7 @@
     </form>
   </section>
 
-  <section>
-    <section id="serie" class="card serie hidden">
+  <section id="serie" class="card serie hidden">
       <div class="hl-head">
         <h2>Série: <span id="serie-bordao"></span></h2>
         <span class="serie-rec tc" id="serie-rec"></span>
@@ -163,13 +163,13 @@
       </div>
       <table class="serie-eps"><thead><tr><th>Ep.</th><th>Data</th><th>Adversário</th><th>Placar</th><th>Resultado</th></tr></thead><tbody id="serie-eps"></tbody></table>
       <p class="muted small" id="serie-empty">Os episódios entram aqui quando cada resumo da série fica pronto. O roteiro do próximo cita a campanha.</p>
-    </section>
-    <div class="section-head"><h2>Projetos</h2></div>
+  </section>
+
+  <section id="home-projetos">
     <div id="job-list" class="job-list"></div>
   </section>
 
-  <section>
-    <div class="section-head"><h2>Estilos de corte</h2></div>
+  <section id="home-estilos">
     <p class="muted" style="margin:-6px 0 16px">Cole links de cortes que você admira: o app assiste e o Claude escreve um guia de como cortar igual. Escolha o estilo ao criar um projeto.</p>
     <div id="style-list" class="style-list"></div>
     <form id="style-form" class="card style-form">
@@ -193,6 +193,7 @@
     <button class="ghost danger" id="delete-job"><i class="ic ic-trash"></i>Excluir projeto</button>
   </div>
   <div id="job-status" class="status"></div>
+  <nav class="tabs page-tabs" id="job-tabs" role="tablist"></nav>
 
   <section id="partidas" class="card hl-panel hidden">
     <div class="hl-script-head">
@@ -222,7 +223,6 @@
     </div>
     <nav class="tabs" id="hl-tabs" role="tablist">
       <button role="tab" data-tab="videos">Vídeos</button>
-      <button role="tab" data-tab="lances">Lances</button>
       <button role="tab" data-tab="legendas">Legendas</button>
       <button role="tab" data-tab="estilo">Estilo</button>
       <button role="tab" data-tab="roteiro">Roteiro</button>
@@ -246,13 +246,6 @@
           <div><b>Horizontal</b> <span class="muted small info"></span></div>
           <div class="actions"><a class="primary dl" download><i class="ic ic-download"></i>Baixar</a><a class="ghost txt" download>Roteiro .txt</a><a class="ghost srt" download>.srt</a></div>
         </article>
-      </div>
-    </div>
-
-    <div class="tab-page" data-tab="lances">
-      <div class="tab-row">
-        <button class="primary" id="hl-edit-btn"><i class="ic ic-film"></i>Abrir o editor da partida</button>
-        <span class="muted small">Assista à partida, ajuste o início e o fim de cada lance, tire ou ponha no short e marque lances novos. Os cartões abaixo também editam cada lance.</span>
       </div>
     </div>
 
@@ -396,6 +389,10 @@
       <button class="primary small" id="tl-pop-create"><i class="ic ic-plus"></i>Criar corte aqui</button></div>
   </section>
 
+  <div class="tab-row hidden" id="lances-head">
+    <button class="primary" id="hl-edit-btn"><i class="ic ic-film"></i>Abrir o editor da partida</button>
+    <span class="muted small">Assista à partida, ajuste o início e o fim de cada lance, tire ou ponha no short e marque lances novos. Os cartões abaixo editam cada lance.</span>
+  </div>
   <p class="review-help" id="review-help"><span>Revisão rápida:</span><span><kbd>J</kbd>/<kbd>K</kbd> anda entre os cortes</span><span><kbd>A</kbd> aprova</span><span><kbd>R</kbd> rejeita (<kbd>1</kbd>–<kbd>5</kbd> motivo)</span><span><kbd>Espaço</kbd> toca</span><span><kbd>E</kbd> edita</span></p>
   <div id="clips" class="clips"></div>
 </main>
@@ -629,9 +626,10 @@
 </dialog>
 
 
-<script src="timeline.js?v=20261116b"></script>
-<script src="stylepreview.js?v=20261116b"></script>
-<script src="app.js?v=20261116b"></script>
-<script src="cover.js?v=20261116b"></script>
+<script src="timeline.js?v=20261116d"></script>
+<script src="stylepreview.js?v=20261116d"></script>
+<script src="tabs.js?v=20261116d"></script>
+<script src="app.js?v=20261116d"></script>
+<script src="cover.js?v=20261116d"></script>
 </body>
 </html>

@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí · Pós-edição</title>
-<link rel="stylesheet" href="style.css?v=20261116b">
+<link rel="stylesheet" href="style.css?v=20261116d">
 </head>
 <body>
 <header class="top">
   <a href="index.html" class="brand">Cortaí</a>
-  <nav class="nav"><a href="index.html"><i class="ic ic-scissors"></i>Cortes</a><a href="pos.html" class="on"><i class="ic ic-music"></i>Pós-edição</a><a href="studio.html"><i class="ic ic-film"></i>Estúdio</a></nav>
+  <nav class="nav"><a href="index.html"><i class="ic ic-scissors"></i>Cortes</a><a href="pos.html" class="on"><i class="ic ic-music"></i>Pós-edição</a><a href="promo.html"><i class="ic ic-send"></i>Chamar pra live</a><a href="studio.html"><i class="ic ic-film"></i>Estúdio</a></nav>
 </header>
 
 <main id="home" class="view">
@@ -19,7 +19,8 @@
       <p>O Claude assiste a um clipe pronto e marca onde entram zoom, tremor, texto, emote, efeito sonoro e trilha. Você revisa e renderiza: sai com trilha e sem trilha.</p>
     </div>
   </div>
-  <section class="card">
+  <nav class="tabs page-tabs" id="pos-home-tabs" role="tablist"></nav>
+  <section class="card" id="ph-nova">
     <form id="pos-form">
       <label class="field wide"><span>Vídeo no PC</span>
         <input name="local_path" type="text" placeholder="C:\Users\...\corte.mp4" required>
@@ -32,7 +33,7 @@
     </form>
   </section>
 
-  <section class="card lib">
+  <section class="card lib" id="ph-lib">
     <h2>Biblioteca de sons, músicas e emotes</h2>
     <p class="muted small">Coloque aqui só arquivos que você tem direito de usar. Música por clima em <code>musicas/tensao</code>, <code>triste</code>, <code>epico</code>, <code>comico</code>. Sem música de tensão ou triste, o Cortaí gera uma trilha original.</p>
     <div class="lib-row">
@@ -60,7 +61,6 @@
     </div>
   </section>
 
-  <div class="section-head"><h2>Pós-edições</h2></div>
   <div id="pos-list" class="job-list"></div>
 </main>
 
@@ -71,6 +71,7 @@
     <button class="ghost danger" id="proj-delete"><i class="ic ic-trash"></i>Excluir</button>
   </div>
   <div id="proj-status" class="status"></div>
+  <nav class="tabs page-tabs" id="pos-tabs" role="tablist"></nav>
 
   <div class="pos-layout">
     <div class="pos-player">
@@ -87,22 +88,26 @@
       <p class="muted small">É o original com o plano por cima, sem renderizar: ligue/desligue efeitos e ajuste tempo e texto na tabela — nada disso gasta tokens.</p>
     </div>
     <div class="pos-plan hidden" id="plan">
-      <p class="historia" id="historia"></p>
-      <table class="beats">
-        <thead><tr><th></th><th>tempo</th><th>o que acontece</th><th>edição</th></tr></thead>
-        <tbody id="beats"></tbody>
-      </table>
-      <div class="trilha-box">
-        <div class="trilha-head"><h4>Trilha</h4><span class="muted small">a música abaixa sozinha quando você fala · <span id="fim-note"></span></span></div>
-        <div class="trilha-bar" id="trilha-bar"></div>
-        <div id="trilha"></div>
+      <div id="pt-efeitos">
+        <p class="historia" id="historia"></p>
+        <table class="beats">
+          <thead><tr><th></th><th>tempo</th><th>o que acontece</th><th>edição</th></tr></thead>
+          <tbody id="beats"></tbody>
+        </table>
       </div>
+      <div id="pt-som">
       <div class="level-row">
         <label class="inline-field">Equilibrar volume da voz
           <select id="nivelar"><option value="off">Desligado</option><option value="suave">Suave</option><option value="medio">Médio (recomendado)</option><option value="forte">Forte</option></select></label>
         <span class="muted small" id="nivelar-note"></span>
       </div>
-      <div class="pos-actions">
+      <div class="trilha-box">
+        <div class="trilha-head"><h4>Trilha</h4><span class="muted small">a música abaixa sozinha quando você fala · <span id="fim-note"></span></span></div>
+        <div class="trilha-bar" id="trilha-bar"></div>
+        <div id="trilha"></div>
+      </div>
+      </div>
+      <div class="pos-actions pos-sticky">
         <button class="primary" id="render-btn"><i class="ic ic-play"></i>Renderizar</button>
         <input id="replan-text" type="text" placeholder="Pedir outro plano: ex. menos efeitos, mais tensão no começo">
         <button class="secondary" id="replan-btn">Pedir outro plano</button>
@@ -136,8 +141,9 @@
   </article>
 </template>
 
-<script src="pos.js?v=20261116b"></script>
-<script src="pospreview.js?v=20261116b"></script>
-<script src="cover.js?v=20261116b"></script>
+<script src="tabs.js?v=20261116d"></script>
+<script src="pos.js?v=20261116d"></script>
+<script src="pospreview.js?v=20261116d"></script>
+<script src="cover.js?v=20261116d"></script>
 </body>
 </html>

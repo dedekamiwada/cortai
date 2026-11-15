@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cortaí · Chamar pra live</title>
+<link rel="stylesheet" href="style.css?v=20261116d">
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">Cortaí</a>
+  <nav class="nav"><a href="index.html"><i class="ic ic-scissors"></i>Cortes</a><a href="pos.html"><i class="ic ic-music"></i>Pós-edição</a><a href="promo.html" class="on"><i class="ic ic-send"></i>Chamar pra live</a><a href="studio.html"><i class="ic ic-film"></i>Estúdio</a></nav>
+</header>
+
+<main id="home" class="view">
+  <div class="page-head">
+    <div>
+      <h1>Chamar pra live</h1>
+      <p>Um vídeo curto para postar <b>durante</b> a live: imagem forte do desafio, três frases (o que é, que você está ao vivo agora, "clica na bolinha vermelha") e o selo LIVE no fim. Sem tokens: tudo é montado aqui.</p>
+    </div>
+    <button class="primary" id="new-promo"><i class="ic ic-plus"></i>Nova chamada</button>
+  </div>
+  <div id="promo-list" class="job-list"></div>
+</main>
+
+<main id="editor" class="view hidden">
+  <div class="job-head">
+    <button class="ghost icon-btn" data-nav="home" title="Voltar" aria-label="Voltar"><i class="ic ic-arrow-left"></i></button>
+    <input id="pm-name" class="title-input" maxlength="80" aria-label="Nome da chamada">
+    <button class="ghost danger" id="pm-delete"><i class="ic ic-trash"></i>Excluir</button>
+  </div>
+
+  <div class="pm-layout">
+    <div class="pm-player">
+      <div class="pv-stage pm-stage" id="pm-stage">
+        <video id="pm-video" playsinline preload="auto" loop></video>
+        <div class="pm-empty" id="pm-empty">Escolha o vídeo de fundo na aba <b>Fundo</b>.</div>
+        <img class="pm-avatar hidden" id="pm-avatar" alt="">
+        <div class="pm-badge hidden" id="pm-badge"></div>
+        <div class="spv-cap" id="pm-cap"></div>
+      </div>
+      <div class="pv-transport">
+        <button class="secondary small" id="pm-play">Tocar</button>
+        <span class="tc" id="pm-time">00:00:00.0</span>
+        <span class="muted small" id="pm-dur"></span>
+      </div>
+      <p class="muted small">Prévia ao vivo: o que você muda nas abas aparece aqui na hora. O vídeo final sai em 1080×1920.</p>
+    </div>
+
+    <div class="pm-side">
+      <nav class="tabs" id="pm-tabs" role="tablist">
+        <button role="tab" data-tab="roteiro">Roteiro</button>
+        <button role="tab" data-tab="fundo">Fundo</button>
+        <button role="tab" data-tab="voz">Voz</button>
+        <button role="tab" data-tab="visual">Visual</button>
+        <button role="tab" data-tab="som">Som</button>
+      </nav>
+
+      <section class="tab-page" data-tab="roteiro">
+        <p class="muted small">Três frases curtas. Na referência: "Esse é o mapa dos 100 níveis mais difíceis…" · "Nesse momento eu tô em live tentando zerar" · "Se a bolinha estiver vermelha, clica aí".</p>
+        <label class="field"><span>1. Gancho: o desafio</span><textarea id="pm-gancho" rows="2" maxlength="220"></textarea></label>
+        <div class="chips" id="chips-gancho"></div>
+        <label class="field"><span>2. Agora: você está ao vivo</span><textarea id="pm-agora" rows="2" maxlength="220"></textarea></label>
+        <div class="chips" id="chips-agora"></div>
+        <label class="field"><span>3. Chamada: o que fazer</span><textarea id="pm-chamada" rows="2" maxlength="220"></textarea></label>
+        <div class="chips" id="chips-chamada"></div>
+      </section>
+
+      <section class="tab-page" data-tab="fundo">
+        <p class="muted small">A imagem mais forte do desafio. Ela entra com um zoom lento, como na referência.</p>
+        <div class="tab-row">
+          <label class="inline-field">Projeto <select id="pm-job"><option value="">Escolha uma live…</option></select></label>
+        </div>
+        <div class="tab-row">
+          <label class="inline-field">A partir de <input id="pm-start" class="time-in" placeholder="00:00:00"></label>
+          <label class="inline-field">Duração <input id="pm-dur-in" type="number" min="3" max="30" step="1" value="12" style="width:5em"> s</label>
+          <button class="secondary small" id="pm-apply-bg">Usar este trecho</button>
+        </div>
+        <div class="chips" id="pm-clips"></div>
+        <div class="tab-row">
+          <span class="muted small">ou</span>
+          <label class="secondary small upload-btn"><i class="ic ic-upload"></i>Enviar um vídeo<input type="file" id="pm-bg-file" accept="video/*" hidden></label>
+          <span class="muted small" id="pm-bg-msg"></span>
+        </div>
+      </section>
+
+      <section class="tab-page" data-tab="voz">
+        <p class="muted small">Grave falando o roteiro (ou envie um áudio). A legenda segue a sua fala, palavra por palavra. Sem voz, o texto aparece no ritmo de leitura.</p>
+        <div class="teleprompter" id="pm-tele"></div>
+        <div class="tab-row">
+          <button class="primary" id="pm-rec"><i class="ic ic-play"></i>Gravar</button>
+          <label class="secondary upload-btn"><i class="ic ic-upload"></i>Enviar áudio<input type="file" id="pm-voice-file" accept="audio/*,video/*" hidden></label>
+          <button class="ghost danger small hidden" id="pm-voice-del">Tirar a voz</button>
+        </div>
+        <p class="muted small" id="pm-voice-msg"></p>
+      </section>
+
+      <section class="tab-page" data-tab="visual">
+        <div class="grid">
+          <label class="field"><span>Legenda</span><select id="pm-preset" class="preset-select"></select></label>
+          <label class="field"><span>Posição da legenda</span><select id="pm-pos"><option value="bottom">Embaixo</option><option value="middle">Meio</option><option value="top">Em cima</option></select></label>
+          <label class="field"><span>Cor de destaque</span><input id="pm-color" type="color" value="#FFE600"></label>
+          <label class="field check"><input id="pm-upper" type="checkbox" checked><span>CAIXA ALTA</span></label>
+          <label class="field check"><input id="pm-zoom" type="checkbox" checked><span>Zoom lento no fundo</span></label>
+          <label class="field check"><input id="pm-selo" type="checkbox" checked><span>Selo LIVE na chamada</span></label>
+          <label class="field"><span>Texto do selo</span><input id="pm-selo-texto" maxlength="14" value="LIVE"></label>
+          <label class="field"><span>Posição do selo</span><select id="pm-selo-pos"><option value="centro">Centro</option><option value="topo">Em cima</option><option value="baixo">Embaixo</option></select></label>
+        </div>
+        <div class="tab-row">
+          <label class="secondary small upload-btn"><i class="ic ic-image"></i>Seu avatar (foto ou logo)<input type="file" id="pm-avatar-file" accept="image/*" hidden></label>
+          <span class="muted small">fica redondo, com anel vermelho, como a bolinha da live</span>
+        </div>
+      </section>
+
+      <section class="tab-page" data-tab="som">
+        <label class="field"><span>Música</span><select id="pm-music"></select></label>
+        <label class="field"><span>Volume da música <b class="cv-val" id="pm-music-v"></b></span><input id="pm-music-vol" type="range" min="0" max="1" step="0.05"></label>
+        <label class="field"><span>Som do vídeo de fundo <b class="cv-val" id="pm-bg-v"></b></span><input id="pm-bg-vol" type="range" min="0" max="1" step="0.05"></label>
+        <p class="muted small">A música e o som do jogo abaixam sozinhos quando você fala. Sua voz recebe o mesmo tratamento e equilíbrio dos cortes.</p>
+      </section>
+
+      <div class="pos-actions pos-sticky">
+        <button class="primary" id="pm-render"><i class="ic ic-play"></i>Gerar vídeo</button>
+        <span class="muted small" id="pm-status"></span>
+      </div>
+      <section class="pm-result hidden" id="pm-result">
+        <video controls playsinline preload="metadata" id="pm-out"></video>
+        <div>
+          <a class="primary" id="pm-dl" download><i class="ic ic-download"></i>Baixar vídeo</a>
+          <label class="field"><span>Texto do post</span><textarea id="pm-post" rows="4"></textarea></label>
+          <button class="ghost small" id="pm-copy">Copiar texto</button>
+          <p class="muted small">Poste enquanto a live está rolando: quem vê o vídeo encontra o anel vermelho na sua foto.</p>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script src="timeline.js?v=20261116d"></script>
+<script src="promo.js?v=20261116d"></script>
+</body>
+</html>

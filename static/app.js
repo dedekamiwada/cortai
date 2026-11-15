@@ -308,10 +308,21 @@ $("#serie-meta-save").onclick = async () => {
   try { await postJSON("/api/serie", { meta: $("#serie-meta").value }); loadSerie(); } catch (ex) { alert(ex.message); }
 };
 
+// ---- abas do início
+let jobsCount = 0;
+const homeTabs = makeTabs($("#home-tabs"), [
+  { id: "novo", label: "Novo projeto", els: () => [$(".new-job")] },
+  { id: "projetos", label: "Projetos", els: () => [$("#home-projetos")], count: () => jobsCount },
+  { id: "serie", label: "Série", els: () => [$("#serie")] },
+  { id: "estilos", label: "Estilos de corte", els: () => [$("#home-estilos")] },
+], "cortai.homeTab");
+
 async function loadJobs() {
-  loadSerie();
+  loadSerie().then(() => homeTabs.refresh());
   const list = $("#job-list");
   const items = await api("/api/jobs");
+  jobsCount = items.length;
+  homeTabs.refresh();
   if (!items.length) { list.innerHTML = `<p class="empty">Nenhum projeto ainda.</p>`; return; }
   list.replaceChildren(...items.map((j) => {
     const el = document.createElement("button");
@@ -351,13 +362,14 @@ function renderJob(job) {
   if (!ready) $$(".panel").forEach((p) => p.classList.add("hidden"));
   $("#zip-btn").href = `/api/jobs/${job.id}/export.zip`;
   $("#covers-btn").classList.toggle("hidden", !job.clips.some((c) => c.status === "done" && !c.cover));
-  renderMatches(job);
-  renderQuality(job);
+  const recap = job.options.mode === "highlights";
+  $("#lances-head").classList.toggle("hidden", !recap);
   if (!$("#antigos-list").children.length && job.antigos) renderOldClips(job.antigos);
-  renderAlts(job);
-  renderTimeline(job);
-  renderHighlight(job);
   renderClips(job);
+  jobTabs.refresh();
+  // blocos que buscam dados aparecem depois: as abas se ajustam quando todos terminam
+  Promise.allSettled([renderMatches(job), renderQuality(job), renderAlts(job), renderTimeline(job), renderHighlight(job)])
+    .then(() => jobTabs.refresh());
 }
 
 // ---- monitor do projeto: etapas (como a fila de render de um editor), atividade, cancelar/retomar
@@ -436,6 +448,20 @@ function renderMonitor(job) {
     try { await postJSON(`/api/jobs/${job.id}/retomar`, {}); openJob(job.id); } catch (ex) { alert(ex.message); resume.disabled = false; }
   };
 }
+
+// ---- abas do projeto (cortes ou resumo da partida)
+const isRecap = () => currentJob?.options?.mode === "highlights";
+const jobTabs = makeTabs($("#job-tabs"), [
+  { id: "resumo", label: "Resumo", els: () => [$("#highlight")], visible: () => isRecap() && !$("#highlight").classList.contains("hidden") },
+  { id: "cortes", label: () => (isRecap() ? "Lances" : "Cortes"), visible: () => true,
+    count: () => currentJob?.clips.length || 0,
+    els: () => [$("#manual"), $("#job-tools"), $("#reselect"), $("#antigos-panel"), $("#create-panel"),
+      isRecap() ? null : $("#apply-panel"), $("#lances-head"), $("#review-help"), $("#clips")] },
+  { id: "linha", label: "Linha do tempo", els: () => [$("#timeline")] },
+  { id: "momentos", label: "Outros momentos", els: () => [$("#alts")], count: () => $$("#alt-list > *").length || 0 },
+  { id: "qualidade", label: "Qualidade", els: () => [$("#quality")] },
+  { id: "partidas", label: "Partidas", els: () => [$("#partidas")] },
+], "cortai.jobTab");
 
 // ---- barra de ferramentas do projeto
 $$("#job-tools [data-panel]").forEach((btn) => btn.addEventListener("click", () => {
