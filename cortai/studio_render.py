@@ -230,8 +230,9 @@ def _fit_chain(label_in: str, label_out: str, it: dict, W: int, H: int, bg: str,
         return (f"[{label_in}]scale={W}:{H}:force_original_aspect_ratio=decrease,"
                 f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={bg}[{label_out}]")
     if fit == "blur":
+        sigma = fx.bg_blur_sigma(it)
         return (f"[{label_in}]split=2[{label_out}a][{label_out}b];"
-                f"[{label_out}a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},gblur=sigma=28,"
+                f"[{label_out}a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},gblur=sigma={sigma:.1f},"
                 f"eq=brightness=-0.08[{label_out}bg];"
                 f"[{label_out}b]scale={W}:{H}:force_original_aspect_ratio=decrease[{label_out}fg];"
                 f"[{label_out}bg][{label_out}fg]overlay=(W-w)/2:(H-h)/2[{label_out}]")
@@ -407,6 +408,9 @@ def build(p: dict, out_dir: Path, scale_to: int | None = None) -> tuple[list[str
             pre.append(f"lut3d=file=look-o{j}.cube:interp=trilinear")
         at = ofx.index(sizing[0])
         ofx[at:at] = pre
+        blur = fx.effect(it, "blur")
+        if blur:  # depois do tamanho final: o desfoque é medido em pixels do vídeo, como no principal
+            ofx.append(f"gblur=sigma={blur * fx.BLUR_SIGMA:.2f}")
         ofx += _flips(it)
         ang = _angle(it)
         if keys.animated(it, "rotate"):

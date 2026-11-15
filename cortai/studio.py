@@ -137,7 +137,7 @@ def delete(pid: str) -> None:
 # ------------------------------------------------------------------ salvar (vindo do editor)
 
 _ITEM_KEYS = {
-    "main": {"id", "asset", "in", "out", "speed", "volume", "mute", "fit", "zoom", "pan_x", "pan_y",
+    "main": {"id", "asset", "in", "out", "speed", "volume", "mute", "fit", "bg_blur", "zoom", "pan_x", "pan_y",
              "brightness", "contrast", "saturation", "transition", "fade_in", "fade_out", "reverse_hint",
              "crop_l", "crop_r", "crop_t", "crop_b", "flip_h", "flip_v", "rotate", "look", "look_amt", "fx",
              "voice_clean", "voice_fx", "kf", "kf_ease"},

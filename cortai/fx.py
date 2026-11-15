@@ -126,6 +126,18 @@ EFFECTS = {
     "shake": "Tremor", "rgb": "Separação RGB", "grain": "Grão de filme", "vignette": "Vinheta",
     "blur": "Desfoque", "glow": "Brilho (glow)", "pixel": "Pixelado",
 }
+BLUR_SIGMA = 25  # "Desfoque" em 100%
+BG_BLUR_DEFAULT = 0.55  # "Fundo desfocado": 0..1 -> sigma 4..48 (o padrão dá o antigo sigma 28)
+
+
+def bg_blur_sigma(it: dict) -> float:
+    try:
+        v = float(it.get("bg_blur", BG_BLUR_DEFAULT))
+    except (TypeError, ValueError):
+        v = BG_BLUR_DEFAULT
+    return 4 + 44 * max(0.0, min(1.0, v))
+
+
 SHAKE_ZOOM = 1.08
 VIGNETTE_START = 0.35
 
@@ -181,7 +193,7 @@ def main_fx(lin: str, lout: str, it: dict, W: int, H: int, tag: str, out_dir: Pa
         step(f"{{in}}lut3d=file={cube.name}:interp=trilinear{{out}}")
     blur = effect(it, "blur")
     if blur:
-        step(f"{{in}}gblur=sigma={blur * 25:.2f}{{out}}")
+        step(f"{{in}}gblur=sigma={blur * BLUR_SIGMA:.2f}{{out}}")
     glow = effect(it, "glow")
     if glow:
         # o "screen" precisa ser em RGB (em YUV o croma sairia errado)

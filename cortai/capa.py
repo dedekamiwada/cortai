@@ -64,7 +64,7 @@ STYLES = {
                 "text": "#FFFFFF", "hl": "#FFD400", "outline": 0, "soft": True},
 }
 DEFAULT_STYLE = "impacto"
-PARAM_KEYS = ("text", "style", "upper", "size", "y", "tilt", "zoom", "px", "py", "dark", "handle",
+PARAM_KEYS = ("text", "style", "upper", "size", "y", "tilt", "zoom", "px", "py", "dark", "blur", "handle",
               "color", "hl_color", "frame")
 
 _metrics: dict | None = None
@@ -346,6 +346,15 @@ def _read(path: Path):
     return cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
 
 
+BLUR_MAX_SIGMA = 40  # em 1080 px de largura: 100% já apaga os detalhes, o fundo vira só cor e forma
+
+
+def _blur_filter(params: dict) -> str:
+    """Desfoque só da imagem; o texto vem depois (subtitles) e continua nítido."""
+    b = min(max(float(params.get("blur") or 0), 0), 1)
+    return f"gblur=sigma={b * BLUR_MAX_SIGMA:.1f}," if b > 0 else ""
+
+
 def render(frame: Path, params: dict, out: Path, preview: bool = False) -> Path:
     """Desenha a capa. preview=True sai em 540x960 (rápido, para o editor)."""
     img = _read(frame)
@@ -362,7 +371,7 @@ def render(frame: Path, params: dict, out: Path, preview: bool = False) -> Path:
     work.mkdir(parents=True, exist_ok=True)
     ass_name = f"_capa_{uuid.uuid4().hex[:8]}.ass"
     (work / ass_name).write_text(build_ass(params), encoding="utf-8")
-    vf = (f"scale={sw}:{sh}:flags=lanczos,crop={W}:{H}:{cx}:{cy},eq=saturation=1.15:contrast=1.06,"
+    vf = (f"scale={sw}:{sh}:flags=lanczos,crop={W}:{H}:{cx}:{cy},{_blur_filter(params)}eq=saturation=1.15:contrast=1.06,"
           f"vignette=PI/5,subtitles={ass_name}:fontsdir={_filter_path(fonts_dir())}")
     if preview:
         vf += ",scale=540:960"
@@ -492,7 +501,7 @@ def default_params(clip: dict, frame_idx: int, frame: Path | None, opts: dict) -
     return {
         "text": auto_highlight(clip.get("title") or "", clip.get("keywords")),
         "style": style if style in STYLES else DEFAULT_STYLE,
-        "upper": True, "size": 1.0, "tilt": 0, "zoom": 1.0, "px": 0.5, "py": 0.5, "dark": 0.35,
+        "upper": True, "size": 1.0, "tilt": 0, "zoom": 1.0, "px": 0.5, "py": 0.5, "dark": 0.35, "blur": 0,
         "y": default_y(frame, clip.get("layout")) if frame else 0.42,
         "handle": opts.get("cover_handle") or "",
         "color": None, "hl_color": None, "frame": frame_idx,
@@ -518,7 +527,7 @@ def clean_params(raw: dict, current: dict) -> dict:
             p[k] = max(0, int(v))
         else:
             lo, hi = {"size": (0.4, 1.8), "y": (0, 1), "tilt": (-15, 15), "zoom": (1, 3),
-                      "px": (0, 1), "py": (0, 1), "dark": (0, 1)}[k]
+                      "px": (0, 1), "py": (0, 1), "dark": (0, 1), "blur": (0, 1)}[k]
             p[k] = min(max(float(v), lo), hi)
     return p
 

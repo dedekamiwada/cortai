@@ -490,6 +490,7 @@ function syncStage(seek = false) {
     if (fit === "blur" && a.poster && i === L.findIndex((x) => T >= x.start && T < x.end)) {
       blurBg.style.display = "block";
       blurBg.style.backgroundImage = `url('/media/${a.poster}')`;
+      blurBg.style.filter = `blur(${(4 + 44 * (it.bg_blur ?? 0.55)) * K}px) brightness(.85)`;
     }
     if (media.tagName === "VIDEO") {
       syncMedia(media, it.in + (T - e.start) * (it.speed || 1), it.speed || 1, seek,
@@ -648,7 +649,7 @@ function refreshKfInspector() {
       const v = kval(sel.track, it, k);
       input.value = v;
       const out = input.parentElement.querySelector("output");
-      if (out) out.textContent = k === "volume" ? `${Math.round(v * 100)}%` : (+v).toFixed(input.step < 0.1 ? 2 : 1);
+      if (out) out.textContent = sliderText(v, +input.step, input.dataset.unit || "");
     }
   }
 }
@@ -701,7 +702,7 @@ let svgDefs = null;
 function svgFilter(l, it) {
   const m = lookMatrix(it);
   const isMain = l.track === "main";
-  const blur = isMain ? fxv(it, "blur") : 0, glow = isMain ? fxv(it, "glow") : 0;
+  const blur = isMain || l.track === "overlay" ? fxv(it, "blur") : 0, glow = isMain ? fxv(it, "glow") : 0;
   const pixel = isMain ? fxv(it, "pixel") : 0, rgb = isMain ? fxv(it, "rgb") : 0;
   const keyRow = l.track === "overlay" ? keyAlphaRow(it) : null;
   if (!m && !blur && !glow && !pixel && !rgb && !keyRow) return "";
@@ -1581,6 +1582,7 @@ function renderInspector() {
     if (track !== "main") h.push(group("Tempo", num("Início (s)", "start", it.start)));
     if (track === "main") {
       h.push(group("Enquadramento", `${seg("", "fit", [["fill", "Preencher"], ["fit", "Encaixar"], ["blur", "Fundo desfocado"]], it.fit || "fill")}
+        ${it.fit === "blur" ? slider("Desfoque do fundo", "bg_blur", 0, 1, 0.05, it.bg_blur ?? 0.55, "%%") : ""}
         ${(it.fit || "fill") === "fill" ? slider("Zoom", "zoom", 1, 3, 0.01, it.zoom ?? 1, "x") + slider("Posição X", "pan_x", -1, 1, 0.01, it.pan_x ?? 0) + slider("Posição Y", "pan_y", -1, 1, 0.01, it.pan_y ?? 0) : ""}`));
     }
     if (track === "overlay") {
@@ -1591,7 +1593,7 @@ function renderInspector() {
       const looks = [{ id: "", label: "Nenhum" }, ...FX.looks];
       h.push(group("Filtro de cor", `<div class="look-grid">${looks.map((l) =>
         `<button class="ghost ${(it.look || "") === l.id ? "on" : ""}" data-look="${l.id}">${esc(l.label)}</button>`).join("")}</div>
-        ${it.look ? slider("Intensidade", "look_amt", 0, 1, 0.05, it.look_amt ?? 1, "", (v) => `${Math.round(v * 100)}%`) : ""}`));
+        ${it.look ? slider("Intensidade", "look_amt", 0, 1, 0.05, it.look_amt ?? 1, "%%") : ""}`));
       if (track === "overlay") {
         const kk = it.key || "";
         h.push(group("Recorte de fundo", `${seg("", "key", FX.keys.map((x) => [x.id, x.label]), kk)}
@@ -1602,9 +1604,9 @@ function renderInspector() {
         h.push(group("Mesclagem", row2("Modo", `<select data-k="blend">${FX.blends.map((x) => `<option value="${x.id}" ${(it.blend || "") === x.id ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select>`) +
           `<p class="muted small">"Tela" e "Somar" deixam só as partes claras (bom para efeitos em fundo preto); "Multiplicar" deixa só as escuras.</p>`));
       }
-      const effects = track === "main" ? FX.effects : FX.effects.filter((x) => x.id === "shake");
-      h.push(group("Efeitos", effects.map((x) => slider(x.label, `fx_${x.id}`, 0, 1, 0.05, fxv(it, x.id), "", (v) => `${Math.round(v * 100)}%`)).join("") +
-        (track === "overlay" ? `<p class="muted small">Na sobreposição só o tremor; os outros efeitos valem para o vídeo principal.</p>` : "") +
+      const effects = track === "main" ? FX.effects : FX.effects.filter((x) => x.id === "shake" || x.id === "blur");
+      h.push(group("Efeitos", effects.map((x) => slider(x.label, `fx_${x.id}`, 0, 1, 0.05, fxv(it, x.id), "%%")).join("") +
+        (track === "overlay" ? `<p class="muted small">Na sobreposição: tremor e desfoque. Os outros efeitos valem para o vídeo principal.</p>` : "") +
         `<div class="insp-actions"><button class="ghost" data-act="resetfx">Tirar efeitos</button></div>`));
     }
     if (track !== "audio" && a.kind !== "audio") {
@@ -1623,7 +1625,7 @@ function renderInspector() {
         <button class="ghost" data-act="pb">P&amp;B</button><button class="ghost" data-act="vivid">Vivo</button><button class="ghost" data-act="cine">Cinema</button></div>`));
     }
     if (a.has_audio || track === "audio") {
-      h.push(group("Áudio", `${slider("Volume", "volume", 0, 2, 0.01, it.volume ?? (track === "overlay" ? 0 : 1), "", (v) => `${Math.round(v * 100)}%`)}
+      h.push(group("Áudio", `${slider("Volume", "volume", 0, 2, 0.01, it.volume ?? (track === "overlay" ? 0 : 1), "%%")}
         ${row2("", `<label class="check"><input type="checkbox" data-k="mute" ${it.mute ? "checked" : ""}> Sem som</label>`)}`));
       if (FX) {
         h.push(group("Voz", `${row2("", `<label class="check"><input type="checkbox" data-k="voice_clean" ${it.voice_clean ? "checked" : ""}> Limpar voz (tira ruído e nivela o volume)</label>`)}
@@ -1695,9 +1697,10 @@ function renderProjectInspector(box) {
 const group = (title, body) => `<div class="insp-group">${title ? `<h4>${title}</h4>` : ""}${body}</div>`;
 const row2 = (label, html) => `<div class="insp-row two"><span>${label}</span><div>${html}</div></div>`;
 const num = (label, k, v) => `<div class="insp-row two"><span>${label}</span><input type="number" step="0.05" data-k="${k}" value="${(+v || 0).toFixed(2)}"></div>`;
-function slider(label, k, min, max, step, v, unit = "", f = null) {
-  const show = f ? f(v) : `${(+v).toFixed(step < 0.1 ? 2 : 1)}${unit}`;
-  return `<div class="insp-row"><span>${label}</span><input type="range" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${v}"><output>${show}</output></div>`;
+// unit "%%" = valor 0..1 mostrado em porcentagem; a mesma formatação vale ao arrastar
+const sliderText = (v, step, unit) => unit === "%%" ? `${Math.round(v * 100)}%` : `${(+v).toFixed(step < 0.1 ? 2 : 1)}${unit}`;
+function slider(label, k, min, max, step, v, unit = "") {
+  return `<div class="insp-row"><span>${label}</span><input type="range" data-k="${k}" data-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${v}"><output>${sliderText(v, step, unit)}</output></div>`;
 }
 function seg(label, k, opts, cur) {
   return `${label ? `<span class="muted small">${label}</span>` : ""}<div class="seg" data-seg="${k}">${opts.map(([v, l]) =>
@@ -1717,7 +1720,7 @@ function liveInput(box, k, it, apply) {
     const v = el.type === "checkbox" ? el.checked : el.type === "range" || el.type === "number" ? +el.value : el.value;
     const tr = sel?.track;
     if (!(it && tr && (KF_PROPS[tr] || []).includes(k) && setAnim(tr, it, k, +(+v).toFixed(4)))) apply(v);
-    if (out && el.type === "range") out.textContent = el.step < 0.1 ? (+el.value).toFixed(2) : (+el.value).toFixed(1);
+    if (out && el.type === "range") out.textContent = sliderText(+el.value, +el.step, el.dataset.unit || "");
     syncStage(true);
     if (["in", "out", "speed", "start", "dur", "imgdur", "tdur"].includes(k)) renderTimeline();
   });
@@ -1731,7 +1734,7 @@ function bindInspector(box, it, track) {
   const a = assetOf(it);
   const set = (k, round = 3) => (v) => (it[k] = typeof v === "number" ? +v.toFixed(round) : v);
   ["text", "font", "color", "stroke", "x", "y", "scale", "opacity", "brightness", "contrast", "saturation", "volume",
-    "fade_in", "fade_out", "zoom", "pan_x", "pan_y", "stroke_w", "size", "hl", "kw_color"].forEach((k) => liveInput(box, k, it, set(k)));
+    "fade_in", "fade_out", "zoom", "bg_blur", "pan_x", "pan_y", "stroke_w", "size", "hl", "kw_color"].forEach((k) => liveInput(box, k, it, set(k)));
   ["crop_l", "crop_r", "crop_t", "crop_b"].forEach((k) => liveInput(box, k, it, (v) => (it[k] = +(v / 100).toFixed(3))));
   liveInput(box, "rotate", it, (v) => (it.rotate = Math.round(v)));
   liveInput(box, "look_amt", it, set("look_amt", 2));

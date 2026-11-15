@@ -31,6 +31,7 @@
         <label class="ed-range"><span class="cv-rhead">Tamanho <b class="cv-val" data-for="cv-size"></b></span><input id="cv-size" type="range" min="0.4" max="1.8" step="0.05"></label>
         <label class="ed-range"><span class="cv-rhead">Inclinação <b class="cv-val" data-for="cv-tilt"></b></span><input id="cv-tilt" type="range" min="-15" max="15" step="1"></label>
         <label class="ed-range"><span class="cv-rhead">Sombra atrás do texto <b class="cv-val" data-for="cv-dark"></b></span><input id="cv-dark" type="range" min="0" max="1" step="0.05"></label>
+        <label class="ed-range"><span class="cv-rhead">Desfoque da imagem <b class="cv-val" data-for="cv-blur"></b></span><input id="cv-blur" type="range" min="0" max="1" step="0.05"></label>
         <div class="ed-row cv-colors">
           <label>Texto <input id="cv-color" type="color"></label>
           <label>Destaque <input id="cv-hl" type="color"></label>
@@ -70,7 +71,7 @@
 const cdlg = document.getElementById("cover-dlg");
 let cv = null;  // { base, opts, info, p (parâmetros), timer, abort, url }
 const CV_FIELDS = { text: "#cv-text", style: "#cv-style", upper: "#cv-upper", size: "#cv-size", tilt: "#cv-tilt",
-  dark: "#cv-dark", handle: "#cv-handle", zoom: "#cv-zoom", px: "#cv-px", py: "#cv-py" };
+  dark: "#cv-dark", blur: "#cv-blur", handle: "#cv-handle", zoom: "#cv-zoom", px: "#cv-px", py: "#cv-py" };
 
 // base: "/api/jobs/<id>/clips/<n>" (clipe de corte) ou "/api/pos/<id>" (vídeo pós-editado)
 // opts: { download, onSaved(), onDefault(params) | null, inVideo: true/false (mostra a opção de gravar no vídeo) }
@@ -102,7 +103,7 @@ async function openCover(base, opts = {}) {
   for (const [k, sel] of Object.entries(CV_FIELDS)) {
     const el = $(sel);
     if (el.type === "checkbox") el.checked = cv.p[k] !== false;
-    else el.value = cv.p[k] ?? "";
+    else el.value = cv.p[k] ?? (el.type === "range" ? 0 : "");  // capas antigas não têm "blur"
   }
   syncColors();
   syncRangeValues();
@@ -136,6 +137,7 @@ const CV_FORMAT = {
   "cv-size": (v) => `${Math.round(v * 100)}%`,
   "cv-tilt": (v) => `${v > 0 ? "+" : ""}${Math.round(v)}°`,
   "cv-dark": (v) => `${Math.round(v * 100)}%`,
+  "cv-blur": (v) => (+v ? `${Math.round(v * 100)}%` : "sem"),
   "cv-zoom": (v) => `${v.toFixed(2).replace(".", ",")}x`,
   "cv-px": (v) => `${Math.round(v * 100)}%`,
   "cv-py": (v) => `${Math.round(v * 100)}%`,
