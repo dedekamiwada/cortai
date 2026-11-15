@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí</title>
-<link rel="stylesheet" href="style.css?v=20261115o">
+<link rel="stylesheet" href="style.css?v=20261115x">
 </head>
 <body>
 <header class="top">
@@ -128,7 +128,7 @@
           <label class="field check"><input name="auto_zoom" type="checkbox" checked><span>Zoom nas reações</span></label>
           <label class="field check"><input name="remove_pauses" type="checkbox"><span>Remover pausas mortas</span></label>
           <label class="field check"><input name="normalize_audio" type="checkbox" checked><span>Volume padrão das redes (-14 LUFS)</span></label>
-          <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada (EQ + compressor)</span></label>
+          <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada e volume equilibrado</span></label>
           <label class="field"><span>Depois do susto <em>(terror)</em></span><select name="pos_susto"><option value="">Nenhum</option><option value="congelar">Congelar no grito</option><option value="pb">Preto e branco</option><option value="congelar_pb">Congelar + preto e branco</option></select></label>
           <label class="field check"><input name="pos_susto_musica" type="checkbox"><span>Música no pós-susto <em>(pasta musicas/pos_susto)</em></span></label>
           <label class="field check"><input name="cover_auto" type="checkbox" checked><span>Capa (thumbnail) pronta em cada clipe</span></label>
@@ -261,7 +261,7 @@
         <label class="check"><input type="checkbox" id="hlc-h"> Legenda também no vídeo horizontal</label>
         <span class="muted small">Cor, tamanho e posição ficam na aba Estilo.</span>
       </div>
-      <div id="hlc-list" class="hlc-list"></div>
+      <div class="hlc-wrap"><div id="hlc-list" class="hlc-list"></div><div id="hlc-pv"></div></div>
       <div class="tab-row">
         <button class="secondary" id="hlc-save"><i class="ic ic-check"></i>Guardar legendas</button>
         <span class="muted small" id="hlc-msg"></span>
@@ -338,6 +338,8 @@
   <section id="apply-panel" class="card panel hidden">
     <h3 id="apply-title">Aplicar o mesmo estilo a todos os clipes</h3>
     <p class="muted small hidden" id="apply-note">No resumo, o short vertical usa tudo isto. O horizontal mostra a partida inteira: dele valem a voz e, se ligada em “Legendas da fala”, a legenda com este estilo.</p>
+    <div class="apply-wrap">
+    <div id="style-pv"></div>
     <div class="grid" id="apply-form">
       <label class="field"><span>Enquadramento</span>
         <select name="layout"><option value="auto">Automático</option><option value="split">Tela dividida</option><option value="face">Seguir rosto</option><option value="fit">Vídeo inteiro</option></select></label>
@@ -358,9 +360,10 @@
       <label class="field check"><input name="auto_zoom" type="checkbox" checked><span>Zoom nas reações</span></label>
       <label class="field check"><input name="remove_pauses" type="checkbox"><span>Remover pausas mortas</span></label>
           <label class="field check"><input name="normalize_audio" type="checkbox" checked><span>Volume padrão das redes (-14 LUFS)</span></label>
-          <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada (EQ + compressor)</span></label>
+          <label class="field check"><input name="voice_enhance" type="checkbox" checked><span>Voz destacada e volume equilibrado</span></label>
       <label class="field"><span>Depois do susto</span><select name="pos_susto"><option value="">Nenhum</option><option value="congelar">Congelar no grito</option><option value="pb">Preto e branco</option><option value="congelar_pb">Congelar + preto e branco</option></select></label>
       <label class="field check"><input name="pos_susto_musica" type="checkbox"><span>Música no pós-susto</span></label>
+    </div>
     </div>
     <label class="check"><input id="apply-default" type="checkbox"> Usar como padrão nos próximos projetos</label>
     <button class="primary" id="apply-btn">Aplicar e renderizar todos</button>
@@ -575,6 +578,10 @@
         <button class="ghost small" id="me-fwd" title="Avança 5 s">+5 s</button>
         <span class="ed-time" id="me-time"></span>
       </div>
+      <div class="ed-transport">
+        <button class="ghost small" id="me-seq-short" title="Toca os lances do short em sequência, com os ajustes ainda não remontados">▶ Montagem do short</button>
+        <button class="ghost small" id="me-seq-h" title="Toca todos os lances em sequência (versão horizontal)">▶ Montagem horizontal</button>
+      </div>
     </div>
     <div class="me-side">
       <div class="ed-section" id="me-sel">
@@ -685,7 +692,8 @@
   </div>
 </dialog>
 
-<script src="timeline.js?v=20261115o"></script>
-<script src="app.js?v=20261115o"></script>
+<script src="timeline.js?v=20261115x"></script>
+<script src="stylepreview.js?v=20261115x"></script>
+<script src="app.js?v=20261115x"></script>
 </body>
 </html>

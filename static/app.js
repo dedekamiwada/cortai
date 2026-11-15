@@ -446,6 +446,7 @@ $$("#job-tools [data-panel]").forEach((btn) => btn.addEventListener("click", () 
   panel.classList.toggle("hidden", !open);
   btn.classList.toggle("active", open);
   if (open && btn.dataset.panel === "create-panel") $("#search-input").focus();
+  if (open && btn.dataset.panel === "apply-panel") showStylePreview();
 }));
 
 let transcriptCache = { id: null, segments: [] };
@@ -728,7 +729,7 @@ function showHlTab(tab) {
   $$("#hl-tabs [data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   $$("#highlight .tab-page").forEach((p) => p.classList.toggle("hidden", p.dataset.tab !== tab));
   if (tab === "legendas" && currentJob) loadRecapCaptions(currentJob, true);
-  if (tab === "estilo") fillRecapStyle();
+  if (tab === "estilo") { fillRecapStyle(); showStylePreview(); }
 }
 $$("#hl-tabs [data-tab]").forEach((b) => (b.onclick = () => showHlTab(b.dataset.tab)));
 // a aba Estilo usa o mesmo formulário do "Estilo de todos" dos cortes (um formulário só, sem cópia)
@@ -750,6 +751,14 @@ function placeApplyPanel(recap) {
   }
   $('#job-tools [data-panel="apply-panel"]').classList.toggle("hidden", recap);
 }
+let stylePv = null, capsPv = null;
+const styleFieldsNow = () => readFields($("#apply-form"), STYLE_FIELDS);
+function showStylePreview() {
+  stylePv ??= new StylePreview($("#style-pv"), { fields: styleFieldsNow });
+  if (currentJob) stylePv.show(currentJob);
+}
+$("#apply-form").addEventListener("input", () => stylePv?.draw());
+$("#apply-form").addEventListener("change", () => stylePv?.draw());
 function fillRecapStyle() {
   const lance = currentJob?.clips.find((c) => c.status === "done");
   if (lance) fillFields($("#apply-form"), { ...currentJob.options, ...lance.overrides });
@@ -847,6 +856,28 @@ async function loadRecapCaptions(job, force = false) {
         <input data-l="${li}" data-i="${i}" value="${escapeHtml(x.text)}" maxlength="200" ${x.manual ? `disabled title="Legenda adicionada à mão: edite no editor do lance"` : ""}></label>`).join("")
         : `<p class="muted small">Sem fala neste lance.</p>`}</div>`).join("");
 }
+function pendingCaptionFixes() {  // o que está digitado e ainda não foi guardado (mesma regra do servidor)
+  const out = {};
+  for (const inp of $$("#hlc-list input[data-l]")) {
+    const l = hlc.data?.lances[+inp.dataset.l], x = l?.lines[+inp.dataset.i];
+    if (!x || x.manual || inp.value.trim() === x.text) continue;
+    const tokens = inp.value.trim().split(/\s+/).filter(Boolean);
+    x.keys.forEach((k, i) => (out[k] = tokens.length === x.keys.length ? tokens[i] : i === 0 ? tokens.join(" ") : ""));
+  }
+  return out;
+}
+$("#hlc-list").addEventListener("focusin", async (e) => {
+  const inp = e.target.closest("input[data-l]");
+  if (!inp || !hlc.data || !currentJob) return;
+  const l = hlc.data.lances[+inp.dataset.l], x = l.lines[+inp.dataset.i];
+  capsPv ??= new StylePreview($("#hlc-pv"), { fixes: pendingCaptionFixes });
+  await capsPv.show(currentJob, l.n);
+  const first = parseFloat(x.keys[0]);  // chave = segundo exato da 1ª palavra da frase
+  const clip = currentJob.clips.find((c) => c.n === l.n);
+  if (Number.isFinite(first)) capsPv.at(first + 0.05);
+  else if (clip) capsPv.at(clip.start + x.t + 0.05);
+});
+$("#hlc-list").addEventListener("input", () => capsPv?.draw());
 $("#hlc-save").onclick = async () => {
   const d = hlc.data;
   if (!d) return;
@@ -977,19 +1008,44 @@ function selectLance(n) {
   }
   drawMatch();
 }
+// prévia da montagem: toca os lances em sequência (com ajustes pendentes), sem renderizar
+function playSequence(kind) {
+  const all = [...currentJob.clips].sort((a, b) => a.start - b.start);
+  const pick = kind === "short" ? (all.some((c) => c.no_short) ? all.filter((c) => c.no_short) : all) : all;
+  const list = pick.map((c) => (me.draft && me.draft.n === c.n ? { n: c.n, s: me.draft.s, e: me.draft.e } : { n: c.n, s: c.start, e: c.end }))
+    .filter((x) => x.s >= me.data.start - 1 && x.e <= me.data.end + 1);
+  if (!list.length) return;
+  me.seq = { list, i: 0, kind };
+  meSeek(list[0].s);
+  meVideo.play();
+}
+$("#me-seq-short").onclick = () => playSequence("short");
+$("#me-seq-h").onclick = () => playSequence("horizontal");
+function seqStep(t) {  // montagem: no fim de um lance pula para o próximo (roda no rAF e no timeupdate)
+  if (!me.seq || meVideo.paused) return;
+  const cur = me.seq.list[me.seq.i];
+  if (t >= cur.e - 0.04 || t < cur.s - 1.5) {
+    me.seq.i += 1;
+    if (me.seq.i >= me.seq.list.length) { me.seq = null; meVideo.pause(); }
+    else meSeek(me.seq.list[me.seq.i].s);
+  }
+}
 function meTick() {  // cabeça de reprodução suave enquanto toca (o timeupdate só vem ~4x por segundo)
   if (!me.data) return;
   const t = meAbs();
-  $("#me-time").textContent = fmtTime(t, true);
+  seqStep(t);
+  $("#me-time").textContent = me.seq
+    ? `Montagem ${me.seq.kind === "short" ? "do short" : "horizontal"}: lance ${me.seq.i + 1} de ${me.seq.list.length} · ${fmtTime(t, true)}`
+    : fmtTime(t, true);
   me.tl?.setTime(t, !meVideo.paused);
   if (me.stopAt && t >= me.stopAt) { meVideo.pause(); me.stopAt = null; }
   if (!meVideo.paused) me.raf = requestAnimationFrame(meTick);
 }
-meVideo.addEventListener("timeupdate", () => { if (meVideo.paused) meTick(); });
+meVideo.addEventListener("timeupdate", () => { if (meVideo.paused) meTick(); else seqStep(meAbs()); });
 meVideo.addEventListener("seeked", meTick);
 $("#me-play").onclick = () => (meVideo.paused ? meVideo.play() : meVideo.pause());
 meVideo.addEventListener("play", () => { $("#me-play").textContent = "Pausar"; cancelAnimationFrame(me.raf); me.raf = requestAnimationFrame(meTick); });
-meVideo.addEventListener("pause", () => { $("#me-play").textContent = "Tocar"; meTick(); });
+meVideo.addEventListener("pause", () => { $("#me-play").textContent = "Tocar"; me.seq = null; meTick(); });
 $("#me-back").onclick = () => meSeek(meAbs() - 5);
 $("#me-fwd").onclick = () => meSeek(meAbs() + 5);
 $("#me-sel-in").onclick = () => { setT("#me-sel-start", meAbs()); meDraftFromInputs(); };

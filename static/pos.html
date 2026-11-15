@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí · Pós-edição</title>
-<link rel="stylesheet" href="style.css?v=20261115o">
+<link rel="stylesheet" href="style.css?v=20261115x">
 </head>
 <body>
 <header class="top">
@@ -74,8 +74,17 @@
 
   <div class="pos-layout">
     <div class="pos-player">
-      <video id="src-video" controls playsinline preload="metadata"></video>
-      <p class="muted small">Original · clique num tempo da tabela para ir até ele</p>
+      <div class="pv-stage" id="pv-stage">
+        <video id="src-video" playsinline preload="auto"></video>
+        <div class="pv-layer" id="pv-layer"></div>
+      </div>
+      <div class="pv-transport">
+        <button class="secondary small" id="pv-play">Tocar</button>
+        <input type="range" id="pv-bar" min="0" max="1000" value="0" aria-label="Posição no vídeo">
+        <span class="tc" id="pv-time">00:00:00.0</span>
+      </div>
+      <label class="check small"><input type="checkbox" id="pv-on" checked> Prévia dos efeitos e da trilha</label>
+      <p class="muted small">É o original com o plano por cima, sem renderizar: ligue/desligue efeitos e ajuste tempo e texto na tabela — nada disso gasta tokens.</p>
     </div>
     <div class="pos-plan hidden" id="plan">
       <p class="historia" id="historia"></p>
@@ -83,12 +92,11 @@
         <thead><tr><th></th><th>tempo</th><th>o que acontece</th><th>edição</th></tr></thead>
         <tbody id="beats"></tbody>
       </table>
-      <h4>Trilha <span class="muted small">— abaixa sozinha quando você fala</span></h4>
-      <table class="beats">
-        <tbody id="trilha"></tbody>
-      </table>
-      <p class="muted small" id="fim-note"></p>
-      <div class="music-sug" id="music-sug"></div>
+      <div class="trilha-box">
+        <div class="trilha-head"><h4>Trilha</h4><span class="muted small">a música abaixa sozinha quando você fala · <span id="fim-note"></span></span></div>
+        <div class="trilha-bar" id="trilha-bar"></div>
+        <div id="trilha"></div>
+      </div>
       <div class="pos-actions">
         <button class="primary" id="render-btn"><i class="ic ic-play"></i>Renderizar</button>
         <input id="replan-text" type="text" placeholder="Pedir outro plano: ex. menos efeitos, mais tensão no começo">
@@ -112,6 +120,7 @@
   </article>
 </template>
 
-<script src="pos.js?v=20261115o"></script>
+<script src="pos.js?v=20261115x"></script>
+<script src="pospreview.js?v=20261115x"></script>
 </body>
 </html>

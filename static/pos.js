@@ -185,13 +185,21 @@ function renderPlan(plan) {
     const tr = document.createElement("tr");
     tr.dataset.id = b.id;
     tr.className = b.on ? "" : "off";
-    tr.innerHTML = `<td><input type="checkbox"></td><td><button class="ghost t"></button></td>
+    tr.innerHTML = `<td><input type="checkbox"></td><td class="t-cell"><input class="t-in tc" maxlength="12" title="Tempo do efeito (HH:MM:SS.d): ajuste à mão"><button class="ghost icon-btn small t" title="Ver este momento">▶</button></td>
       <td class="what"></td><td class="edit"><b></b> <span class="detail"></span><div class="muted small why"></div></td>`;
     const box = $("input", tr);
     box.checked = b.on;
     box.onchange = () => tr.classList.toggle("off", !box.checked);
-    $(".t", tr).textContent = sec(b.t);
-    $(".t", tr).onclick = () => { const v = $("#src-video"); v.currentTime = Math.max(0, b.t - 1); v.play(); };
+    $(".t-in", tr).value = sec(b.t);
+    $(".t-in", tr).onchange = (e) => {
+      const t = parseHms(e.target.value);
+      e.target.classList.toggle("invalid", isNaN(t));
+      if (!isNaN(t)) e.target.value = sec(t);
+    };
+    $(".t", tr).onclick = () => {
+      const t = parseHms($(".t-in", tr).value);
+      const v = $("#src-video"); v.currentTime = Math.max(0, (isNaN(t) ? b.t : t) - 1); v.play();
+    };
     $(".what", tr).textContent = b.o_que;
     $(".edit b", tr).textContent = TIPOS[b.tipo] || b.tipo;
     $(".edit b", tr).className = `chip ${b.tipo === "sfx" ? "info" : b.tipo === "flash_texto" ? "warn" : "accent"}`;
@@ -210,38 +218,64 @@ function renderPlan(plan) {
     $(".why", tr).textContent = [b.motivo, b.aviso && `Atenção: ${b.aviso}`].filter(Boolean).join(" · ");
     return tr;
   }));
-  $("#trilha").replaceChildren(...plan.trilha.map((s) => {
-    const tr = document.createElement("tr");
-    tr.dataset.id = s.id;
-    tr.className = s.on ? "" : "off";
-    const fonte = s.fonte === "mudo" ? "sem música deste clima na biblioteca (veja as indicações abaixo)" : s.arquivo || "";
-    tr.innerHTML = `<td><input type="checkbox"></td><td>${sec(s.de)} → ${sec(s.ate)}</td><td><b></b></td><td class="muted small"></td>`;
-    const box = $("input", tr);
-    box.checked = s.on;
-    box.onchange = () => tr.classList.toggle("off", !box.checked);
-    $("b", tr).textContent = CLIMAS[s.clima] || s.clima;
-    $("td.muted", tr).textContent = fonte;
-    return tr;
-  }));
-  $("#fim-note").textContent = `O vídeo termina em ${sec(plan.fim)}.`;
-  loadMusicSuggestions();
+  renderTrilha(plan);
+  window.posPreview?.setPlan(plan);
+  markMissing(plan);
 }
 
-// músicas que dão emoção a cada trecho da trilha (indicação; o arquivo entra pelo "Importar por link")
-async function loadMusicSuggestions() {
-  if (!current) return;
-  let sug;
-  try { sug = await api(`/api/pos/${current.id}/musicas`); } catch { return; }
-  const NOMES = { epico: "Jogada boa / virada", comico: "Falha / caos", triste: "Derrota", tensao: "Antes do lance" };
-  $("#music-sug").innerHTML = `<h4>Música para esta jogada</h4>` + Object.entries(sug).map(([clima, items]) => `
-    <div class="sug-group"><b>${esc(NOMES[clima] || clima)}</b>
-      <ul>${items.map((s) => `<li>
-        <span><b>${esc(s.titulo)}</b> — ${esc(s.artista)}</span>
-        <span class="chip ${s.licenca === "livre" ? "accent" : "warn"}" title="${s.licenca === "livre" ? "Kevin MacLeod, CC BY 4.0: use com crédito" : "no TikTok/Reels use o som do app; no YouTube costuma ser reivindicada"}">${s.licenca === "livre" ? "livre (crédito)" : "comercial"}</span>
-        <span class="muted small">${esc(s.momento)} · ${esc(s.como)}</span>
-        ${s.na_biblioteca ? `<span class="chip">na biblioteca</span>`
-          : `<a class="ghost small" href="pos.html?importar=${encodeURIComponent(s.arquivo_sugerido)}&buscar=${encodeURIComponent(s.buscar)}">Importar…</a>`}
-      </li>`).join("")}</ul></div>`).join("");
+// som/emote do plano que não está na biblioteca (ex.: os sintetizados que saíram): desliga e avisa
+async function markMissing(plan) {
+  let lib;
+  try { lib = await api("/api/pos/biblioteca"); } catch { return; }
+  const have = { sfx: new Set(lib.sfx), emote: new Set(lib.emotes) };
+  for (const b of plan.beats) {
+    if (!have[b.tipo] || have[b.tipo].has(b.arquivo)) continue;
+    const tr = $(`#beats tr[data-id="${b.id}"]`);
+    if (!tr) continue;
+    $("input[type=checkbox]", tr).checked = false;
+    tr.classList.add("off");
+    $(".why", tr).textContent = `${b.arquivo} não está mais na biblioteca: importe um som real ou deixe desligado`;
+  }
+}
+
+// ---- trilha: um cartão por trecho (o momento, a música escolhida ali e o que combina) + barra do clipe
+const MOMENTO = { tensao: "Antes do lance", epico: "Jogada boa / virada", comico: "Falha / caos", triste: "Derrota",
+  corte_seco: "Corte seco" };
+const CLIMA_COR = { tensao: "var(--warn)", epico: "var(--accent)", comico: "var(--info)", triste: "#9a8cff", corte_seco: "var(--line-strong)" };
+async function renderTrilha(plan) {
+  $("#fim-note").textContent = `o vídeo tem ${sec(plan.fim)}`;
+  const span = Math.max(0.1, plan.fim);
+  $("#trilha-bar").innerHTML = plan.trilha.map((s) => `<i style="left:${(s.de / span) * 100}%;width:${((s.ate - s.de) / span) * 100}%;background:${CLIMA_COR[s.clima] || "var(--line-strong)"}"
+    title="${esc(MOMENTO[s.clima] || s.clima)} · ${sec(s.de)} → ${sec(s.ate)}"></i>`).join("");
+  let lib = { musicas: {} }, sug = {};
+  try { [lib, sug] = await Promise.all([api("/api/pos/biblioteca"), api(`/api/pos/${current.id}/musicas`)]); } catch { /* sem biblioteca: só mudo */ }
+  const options = (sel) => `<option value="">Sem música (silêncio)</option>` + Object.entries(lib.musicas).filter(([, fs]) => fs.length)
+    .map(([c, fs]) => `<optgroup label="${esc(MOMENTO[c] || c)}">${fs.map((f) => `<option value="${esc(`${c}/${f}`)}"${`${c}/${f}` === sel ? " selected" : ""}>${esc(f)}</option>`).join("")}</optgroup>`).join("");
+  const anyMusic = Object.values(lib.musicas).some((fs) => fs.length);
+  const suggested = new Set();  // sugestões só no 1º trecho de cada tipo (sem repetir a mesma lista)
+  $("#trilha").replaceChildren(...plan.trilha.map((s) => {
+    const el = document.createElement("div");
+    el.className = `tr-sec${s.on ? "" : " off"}`;
+    el.dataset.id = s.id;
+    el.style.setProperty("--c", CLIMA_COR[s.clima] || "var(--line-strong)");
+    const seco = s.clima === "corte_seco";
+    const sel = s.arquivo ? `${s.pasta || s.clima}/${s.arquivo}` : "";
+    const picks = suggested.has(s.clima) ? [] : (sug[s.clima] || []).slice(0, 3);
+    suggested.add(s.clima);
+    el.innerHTML = `
+      <label class="tr-top"><input type="checkbox" class="tr-on"${s.on ? " checked" : ""}>
+        <b>${esc(MOMENTO[s.clima] || s.clima)}</b><span class="tc">${sec(s.de)} → ${sec(s.ate)}</span></label>
+      ${seco ? `<p class="muted small">A música para de repente aqui: o silêncio dá impacto ao lance.</p>` : `
+      <label class="tr-pick">Música <select class="tr-music">${options(sel)}</select></label>
+      ${anyMusic ? "" : `<p class="muted small">Sua biblioteca ainda não tem músicas. Importe uma das sugestões abaixo.</p>`}
+      ${picks.length ? `<div class="tr-sug"><span class="muted small">Combina aqui:</span>${picks.map((m) => `
+        <span class="tr-song" title="${esc(m.momento)} · ${esc(m.como)}"><b>${esc(m.titulo)}</b> <span class="muted">${esc(m.artista)}</span>
+          <span class="chip ${m.licenca === "livre" ? "accent" : "warn"}">${m.licenca === "livre" ? "livre" : "comercial"}</span>
+          ${m.na_biblioteca ? "" : `<a class="ghost small" href="pos.html?importar=${encodeURIComponent(m.arquivo_sugerido)}&buscar=${encodeURIComponent(m.buscar)}">Importar</a>`}</span>`).join("")}</div>` : ""}`}`;
+    $(".tr-on", el).onchange = (e) => el.classList.toggle("off", !e.target.checked);
+    return el;
+  }));
+  window.posPreview?.setPlan(plan);
 }
 
 function renderResults(p) {
@@ -264,11 +298,15 @@ function renderResults(p) {
 $("#render-btn").onclick = async () => {
   $("#plan-error").textContent = "";
   const off = [...$("#beats").children].filter((tr) => !$("input[type=checkbox]", tr).checked).map((tr) => +tr.dataset.id);
-  const offTrilha = [...$("#trilha").children].filter((tr) => !$("input", tr).checked).map((tr) => +tr.dataset.id);
-  const textos = {};
-  [...$("#beats").children].forEach((tr) => { const t = $("input.txt", tr); if (t) textos[tr.dataset.id] = t.value; });
+  const offTrilha = $$("#trilha .tr-sec").filter((el) => !$(".tr-on", el).checked).map((el) => +el.dataset.id);
+  const musicas = Object.fromEntries($$("#trilha .tr-sec").filter((el) => $(".tr-music", el)).map((el) => [el.dataset.id, $(".tr-music", el).value]));
+  const textos = {}, tempos = {};
+  [...$("#beats").children].forEach((tr) => {
+    const t = $("input.txt", tr); if (t) textos[tr.dataset.id] = t.value;
+    const tt = parseHms($("input.t-in", tr)?.value); if (!isNaN(tt)) tempos[tr.dataset.id] = tt;
+  });
   try {
-    await postJSON(`/api/pos/${current.id}/render`, { off, off_trilha: offTrilha, textos });
+    await postJSON(`/api/pos/${current.id}/render`, { off, off_trilha: offTrilha, textos, tempos, musicas });
     openProject(current.id);
   } catch (ex) { $("#plan-error").textContent = ex.message; }
 };
@@ -287,3 +325,7 @@ $("#proj-delete").onclick = async () => {
 };
 
 route();
+
+// usados pelo preview (pospreview.js)
+window.parseHms = parseHms;
+window.sec = sec;

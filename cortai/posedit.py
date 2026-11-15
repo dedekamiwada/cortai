@@ -103,6 +103,15 @@ def _retire_generated(sfx: Path) -> None:
             f.replace(keep / f.name)
 
 
+def library_file(rel: str) -> Path:
+    """Arquivo da biblioteca para o preview tocar/mostrar; nunca sai da pasta da biblioteca."""
+    root = library_dir().resolve()
+    path = (root / (rel or "")).resolve()
+    if root not in path.parents or not path.is_file() or path.suffix.lower() not in AUDIO_EXT | IMAGE_EXT:
+        raise FileNotFoundError(rel)
+    return path
+
+
 def music_suggestions(pid: str) -> dict:
     """Músicas que dão emoção a cada trecho da trilha do plano (por clima), sem tokens."""
     p = get(pid)
@@ -482,7 +491,8 @@ def normalize_plan(raw: dict, dur: float, words: list[dict], lib: dict) -> dict:
 
 # ------------------------------------------------------------------ render
 
-def start_render(pid: str, off: list[int], off_trilha: list[int], textos: dict) -> None:
+def start_render(pid: str, off: list[int], off_trilha: list[int], textos: dict, tempos: dict | None = None,
+                 musicas: dict | None = None) -> None:
     p = get(pid)
     if not p or p["status"] not in ("ready", "done", "error") or not p.get("plan"):
         raise ValueError("o plano ainda não está pronto")
@@ -492,8 +502,26 @@ def start_render(pid: str, off: list[int], off_trilha: list[int], textos: dict) 
         new = textos.get(str(b["id"]))
         if new is not None and b["tipo"] in ("flash_texto", "selo"):
             b["texto"] = _clean_text(new, 24 if b["tipo"] == "flash_texto" else 14) or b["texto"]
+        t = (tempos or {}).get(str(b["id"]))
+        if t is not None:  # tempo ajustado à mão na tabela (o preview mostrou)
+            try:
+                b["t"] = round(min(max(float(t), 0.0), max(0.0, plan["fim"] - 0.1)), 2)
+            except (TypeError, ValueError):
+                pass
+    lib = library_dir()
+    for b in plan["beats"]:  # som/emote que saiu da biblioteca (ex.: os sintetizados antigos): desliga em vez de quebrar
+        folder = {"sfx": "sfx", "emote": "emotes"}.get(b["tipo"])
+        if b["on"] and folder and not (lib / folder / (b.get("arquivo") or "")).is_file():
+            b["on"], b["aviso"] = False, "arquivo não está mais na biblioteca"
     for s in plan["trilha"]:
         s["on"] = s["id"] not in off_trilha
+        pick = (musicas or {}).get(str(s["id"]))
+        if pick is not None and s["clima"] != "corte_seco":  # música escolhida no cartão do trecho ("" = silêncio)
+            pasta, _, nome = str(pick).partition("/")
+            ok = pasta in CLIMAS and nome and "/" not in nome and "\\" not in nome and (lib / "musicas" / pasta / nome).is_file()
+            s["pasta"], s["arquivo"] = (pasta, nome) if ok else (s["clima"], "")
+        if s["arquivo"] and not (lib / "musicas" / s.get("pasta", s["clima"]) / s["arquivo"]).is_file():
+            s["arquivo"], s["fonte"] = "", "mudo"
     update(pid, plan=plan, status="rendering", progress=0.0, message="Renderizando…", error=None)
     _worker.submit(_guard, pid, _render)
 
@@ -639,7 +667,7 @@ def _render_video(pid: str, plan: dict, meta: dict, out: Path) -> None:
 
 
 def _music_file(pid: str, s: dict) -> Path | None:
-    return library_dir() / "musicas" / s["clima"] / s["arquivo"] if s["arquivo"] else None
+    return library_dir() / "musicas" / s.get("pasta", s["clima"]) / s["arquivo"] if s["arquivo"] else None
 
 
 def _render_audio(pid: str, plan: dict, meta: dict, sem: Path, com: Path) -> bool:

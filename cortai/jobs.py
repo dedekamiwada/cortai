@@ -1020,7 +1020,7 @@ def _hseg(job_id: str, clip: dict, words: list[dict]) -> Path:
     src, opts, hl = job["source"], job["options"], job.get("highlight") or {}
     o = {**opts, **clip.get("overrides", {})}
     cap = bool(hl.get("legenda_horizontal")) and bool(words)
-    key = {"v": 1, "s": clip["start"], "e": clip["end"], "voz": bool(opts.get("voice_enhance", True)), "cap": cap,
+    key = {"v": 2, "s": clip["start"],  # v2: voz com nivelador dinâmico "e": clip["end"], "voz": bool(opts.get("voice_enhance", True)), "cap": cap,
            "look": {k: o.get(k) for k in CAPTION_LOOK} if cap else None,
            "kw": clip.get("keywords") if cap else None}
     d = _clip_dir(job_id, clip)

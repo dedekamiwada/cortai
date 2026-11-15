@@ -551,6 +551,14 @@ async def pos_set_library(request: Request):
         raise HTTPException(400, str(exc))
 
 
+@app.get("/api/pos/biblioteca/arquivo")
+def pos_library_file(p: str = ""):
+    try:
+        return FileResponse(posedit.library_file(p))
+    except FileNotFoundError:
+        raise HTTPException(404, "arquivo não está na biblioteca")
+
+
 @app.post("/api/pos/biblioteca/importar")
 async def pos_import(request: Request):
     body = await request.json()
@@ -603,7 +611,8 @@ async def pos_render(pid: str, request: Request):
     body = await request.json()
     try:
         posedit.start_render(pid, [int(i) for i in body.get("off") or []],
-                             [int(i) for i in body.get("off_trilha") or []], body.get("textos") or {})
+                             [int(i) for i in body.get("off_trilha") or []], body.get("textos") or {},
+                             body.get("tempos") or {}, body.get("musicas") or {})
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}

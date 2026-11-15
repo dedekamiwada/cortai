@@ -34,9 +34,14 @@ FREEZE_ZOOM = 1.18
 LOUDNESS, TRUE_PEAK = -14, -2.0  # TikTok/Reels/Shorts; pico com folga porque o AAC sobe os picos ~1 dB
 # Voz destacada: tira o grave abafado (250 Hz), realça a presença (3,2 kHz) e o ar, comprime e segura o
 # pico do grito. Testado num corte de live: a faixa dinâmica caiu de 8 para ~5 LU sem estourar.
+# voz: EQ + compressor + nivelador dinâmico (sobe a fala baixa e segura o grito ao longo do tempo; o loudnorm
+# depois só acerta a média). Medido em 3 trechos de 60 s da live: variação de volume (LRA) 9,1 → 5,7 LU, distância
+# fala alta × baixa 7,0 → 4,3 dB, chiado nas pausas +2 dB, sem atraso de áudio. speechnorm e versões mais fortes
+# equilibravam menos ou subiam o chiado 4–5 dB.
 VOICE_CHAIN = ("highpass=f=85,equalizer=f=250:t=q:w=1.2:g=-3,equalizer=f=3200:t=q:w=1.0:g=4,"
                "highshelf=f=9000:g=2,acompressor=threshold=-22dB:ratio=4:attack=4:release=150:makeup=6dB:knee=4,"
-               "alimiter=limit=0.84:attack=2:release=60:level=disabled")
+               "alimiter=limit=0.84:attack=2:release=60:level=disabled,"
+               "dynaudnorm=f=200:g=13:p=0.9:m=10:r=0.28:s=10")
 _encoder: list[str] | None = None
 
 
