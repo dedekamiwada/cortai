@@ -698,3 +698,10 @@ kbd { font: 600 11px/1 var(--mono); padding: 3px 6px; border-radius: 5px; backgr
 .me-lg.short { background: rgba(196, 245, 61, .6); } .me-lg.only-h { background: rgba(161, 161, 181, .5); }
 .me-lg.goal { background: var(--danger); width: 4px; } .me-lg.mark { border: 2px dashed var(--info); }
 @media (max-width: 760px) { .me-body { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------- qualidade do projeto */
+#quality { margin-bottom: 20px; }
+#quality h2 { margin: 0; flex: 1; }
+.q-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-top: 12px; }
+.q-tile { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
+.q-tile b { font: 700 22px/1.2 var(--font-display); color: var(--text); }

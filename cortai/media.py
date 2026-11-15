@@ -37,7 +37,7 @@ def download(url: str, dest_dir: Path, max_height: int = 1080) -> tuple[Path, st
 def probe(path: Path) -> dict:
     proc = run([
         "ffprobe", "-v", "error", "-print_format", "json",
-        "-show_streams", "-show_format", str(path),
+        "-show_streams", "-show_format", "-show_chapters", str(path),
     ])
     info = json.loads(proc.stdout)
     video = next((s for s in info["streams"] if s.get("codec_type") == "video"), None)
@@ -59,7 +59,22 @@ def probe(path: Path) -> dict:
         "height": height,
         "fps": fps or 30.0,
         "has_audio": has_audio,
+        # marcadores do atalho "Adicionar marcador de capítulo" do OBS (só gravando em Hybrid MP4/MOV)
+        "chapters": [{"t": round(float(c["start_time"]), 2), "titulo": (c.get("tags") or {}).get("title", "")}
+                     for c in info.get("chapters") or [] if c.get("start_time") is not None],
+        # faixas de áudio na ordem do arquivo (o OBS grava até 6: mixagem, microfone, jogo…)
+        "audio_tracks": [{"titulo": _track_name(s.get("tags") or {}), "canais": s.get("channels", 0)}
+                         for s in info["streams"] if s.get("codec_type") == "audio"],
     }
+
+
+GENERIC_HANDLERS = {"soundhandler", "core media audio", "audio"}
+
+
+def _track_name(tags: dict) -> str:
+    """MKV guarda o nome da faixa em `title`; MP4/MOV no `handler_name`, que sem nome vem genérico."""
+    name = (tags.get("title") or tags.get("handler_name") or "").strip()
+    return "" if name.lower() in GENERIC_HANDLERS else name
 
 
 def probe_any(path: Path) -> dict:
@@ -76,9 +91,11 @@ def probe_any(path: Path) -> dict:
 
 
 def extract_audio(src: Path, dest: Path, duration: float = 0.0,
-                  on_progress: Callable[[float], None] = lambda p: None) -> Path:
-    """Extrai WAV 16 kHz mono, informando o progresso pelo `-progress` do ffmpeg."""
+                  on_progress: Callable[[float], None] = lambda p: None, track: int | None = None) -> Path:
+    """Extrai WAV 16 kHz mono, informando o progresso pelo `-progress` do ffmpeg. `track` = índice da faixa
+    de áudio (0 = primeira); sem ele o ffmpeg escolhe a padrão."""
     cmd = ["ffmpeg", "-y", "-v", "error", "-nostats", "-progress", "pipe:1", "-i", str(src),
+           *(["-map", f"0:a:{track}"] if track is not None else []),
            "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(dest)]
     with tempfile.TemporaryFile() as err:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True, encoding="utf-8", errors="replace")

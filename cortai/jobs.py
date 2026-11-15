@@ -48,6 +48,8 @@ DEFAULT_OPTS = {
     "remove_pauses": False,
     "normalize_audio": True,
     "voice_enhance": True,
+    "voice_track": 0,                  # faixa de áudio da voz (1, 2…); 0 = automática (faixa "mic"/"voz" se houver)
+    "explore": False,                  # +1 corte de um tipo pouco testado no canal, marcado como exploração
     "mode": "clips",                   # "clips" (vários cortes) ou "highlights" (melhores momentos num vídeo)
     "highlight_basis": "fala_imagem",  # "fala_imagem" ou "imagem"
     "pos_susto": "",                   # terror: "congelar", "pb" ou "congelar_pb" do susto até o fim
@@ -221,12 +223,31 @@ def _throttled_progress(job_id: str, p: float) -> None:
         update(job_id, progress=round(p, 3))
 
 
+VOICE_NAMES = ("mic", "voz", "voice", "micro", "fala")
+
+
+def _voice_track(job: dict) -> tuple[int | None, str]:
+    """Faixa de áudio para transcrever e medir volume. Com várias faixas (OBS), a do microfone tem a voz
+    sem o som do jogo por cima: Whisper erra menos e os picos de volume são do streamer, não de explosões."""
+    tracks = job["source"].get("audio_tracks") or []
+    want = int(job["options"].get("voice_track") or 0)
+    if 1 <= want <= len(tracks):
+        return want - 1, f"faixa {want}" + (f" ({tracks[want - 1]['titulo']})" if tracks[want - 1]["titulo"] else "")
+    if len(tracks) > 1:
+        for i, t in enumerate(tracks):
+            if any(k in t["titulo"].lower() for k in VOICE_NAMES):
+                return i, f"faixa {i + 1} ({t['titulo']})"
+    return None, ""
+
+
 def _ensure_audio(job_id: str, path: Path, duration: float) -> Path:
     audio = _dir(job_id) / "audio.wav"
     if not audio.exists():
-        update(job_id, status="transcribing", message="Extraindo áudio…", progress=0.0)
+        track, label = _voice_track(get(job_id))
+        update(job_id, status="transcribing", progress=0.0,
+               message=f"Extraindo a voz da {label}…" if label else "Extraindo áudio…")
         tmp = audio.with_suffix(".tmp.wav")
-        media.extract_audio(path, tmp, duration, on_progress=lambda p: _throttled_progress(job_id, p))
+        media.extract_audio(path, tmp, duration, on_progress=lambda p: _throttled_progress(job_id, p), track=track)
         tmp.replace(audio)
     return audio
 
@@ -296,8 +317,17 @@ def _timeline(job_id: str, backend: str, loud: list[float], words: list[dict]) -
                            "placar": e.get("placar", ""), "relogio": e.get("relogio", ""), "fim_pausa": e["fim_pausa"]})
     for pk in signals.robust_peaks(loud):
         events.append({"t": pk["t"], "kind": "reacao", "dur": 1.0, "z": pk["z"]})
+    for m in get(job_id)["source"].get("chapters") or []:
+        events.append({"t": m["t"], "kind": "marcador", "dur": 0.0, "titulo": m["titulo"]})
     events.sort(key=lambda e: e["t"])
     return events
+
+
+MARKER_LAG = 45  # o atalho é apertado DEPOIS do lance: procura o momento até 45 s antes do marcador
+
+
+def _marked(clip: dict, markers: list[dict]) -> dict | None:
+    return next((m for m in markers if clip["start"] - 5 <= m["t"] <= clip["end"] + MARKER_LAG), None)
 
 
 def _anchors(events: list[dict]) -> list[dict]:
@@ -332,7 +362,8 @@ def _run_pipeline(job_id: str) -> None:
     events = _timeline(job_id, backend, loud, words)
 
     style = styles.get(JOBS_DIR, opts.get("style_id"))
-    system = picker.system_prompt(opts["content_type"], style) + titles.guide(JOBS_DIR, options=False)
+    system = (picker.system_prompt(opts["content_type"], style) + titles.guide(JOBS_DIR, options=False)
+              + titles.clip_guide(JOBS_DIR))
     prompt = picker.build_prompt(transcript, events, src["duration"], opts)
     (d / "prompt.txt").write_text(picker.manual_prompt(system, prompt), encoding="utf-8")
 
@@ -603,6 +634,41 @@ def _redo_clip(job_id: str, idx: int, instruction: str, backend: str) -> None:
     _render_one(job_id, idx, _words(job_id))
 
 
+def quality(job_id: str) -> dict:
+    """Métricas de qualidade do projeto ANTES de postar (as da plataforma chegam tarde e com ruído): o que a
+    pesquisa recomendou acompanhar por live."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    clips = [c for c in job["clips"] if c.get("status") == "done"]
+    if not clips:
+        return {}
+    n = len(clips)
+    fb = [c.get("feedback") or {} for c in clips]
+    reasons: dict[str, int] = {}
+    for f in fb:
+        if f.get("veredito") == "rejeitado":
+            reasons[f.get("motivo") or "outro"] = reasons.get(f.get("motivo") or "outro", 0) + 1
+    tested = [c for c in clips if c.get("estranho")]
+    lead = sorted(c["peak"] - c["start"] for c in clips if c.get("peak"))
+    starts = _match_starts(job_id)
+    match_of = lambda t: sum(1 for s0 in starts if s0 <= t)
+    return {
+        "cortes": n,
+        "ancorados": sum(1 for c in clips if c.get("anchor")),
+        "estranho_testados": len(tested),
+        "estranho_ok": sum(1 for c in tested if c["estranho"].get("entende")),
+        "contexto_tela": sum(1 for c in clips if c.get("contexto_tela")),
+        "aprovados": sum(1 for f in fb if f.get("veredito") == "ok"),
+        "rejeitados": sum(1 for f in fb if f.get("veredito") == "rejeitado"),
+        "motivos": reasons,
+        "segundos_ate_lance": round(lead[len(lead) // 2], 1) if lead else None,
+        "partidas": len({match_of(c.get("peak") or c["start"]) for c in clips}) if starts else None,
+        "pausas_removidas_s": round(sum(c.get("removed") or 0 for c in clips), 1),
+        "duracao_media_s": round(sum(c.get("out_duration") or (c["end"] - c["start"]) for c in clips) / n, 1),
+    }
+
+
 def timeline(job_id: str) -> dict:
     """Linha do tempo da live para a tela: partidas e gols (placar), reações fortes e os cortes que já existem."""
     job = get(job_id)
@@ -838,9 +904,19 @@ def _accept_plan(job_id: str, raw: dict) -> None:
     anchors = _anchors(_timeline(job_id, backend, loud, words))
     clips = picker.snap_clips(picker.parse_plan(raw), words, src["duration"], opts["min_len"], opts["max_len"],
                               anchors=anchors)
+    snapped = clips
     clips = _diversify(clips, int(opts["num_clips"]), _match_starts(job_id))
     if not clips:
         raise RuntimeError("nenhum candidato passou na revisão — tente outras instruções ou desligue a revisão visual")
+    if opts.get("explore"):
+        extra = _exploration([c for c in snapped if c not in clips], clips)
+        if extra:
+            clips.append({**extra, "explorar": True})
+    markers = src.get("chapters") or []
+    for c in clips:
+        m = _marked(c, markers)
+        if m:
+            c["marcador"] = m
     for i, c in enumerate(clips, 1):
         c.update({"n": i, "status": "pending", "rev": 0, "review_image": images.get(c["candidate"])})
     if backend in ("cli", "api"):
@@ -848,6 +924,19 @@ def _accept_plan(job_id: str, raw: dict) -> None:
     update(job_id, clips=clips, status="rendering", progress=0.0)
     titles.record(JOBS_DIR, job_id, clips)
     _render_all(job_id, words)
+
+
+def _exploration(rest: list[dict], picked: list[dict]) -> dict | None:
+    """Um corte a mais, de propósito, do tipo que o canal menos mediu (e que não está entre os escolhidos):
+    sem variedade o aprendizado só confirma o que já se posta. Nota mínima 50 para não virar enchimento."""
+    kind = lambda c: (c.get("anchor") or {}).get("kind") or "sem_ancora"
+    measured = titles.measured_counts(JOBS_DIR)
+    have = {kind(c) for c in picked}
+    pool = [c for c in rest if c.get("score", 0) >= 50 and not any(
+        min(c["end"], p["end"]) - max(c["start"], p["start"]) > 0 for p in picked)]
+    if not pool:
+        return None
+    return min(pool, key=lambda c: (kind(c) in have, measured.get(kind(c), 0), -c.get("score", 0)))
 
 
 PER_MATCH = 2  # no teste do P0, 3 de 4 cortes saíram da mesma partida

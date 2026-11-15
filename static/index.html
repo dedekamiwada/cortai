@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí</title>
-<link rel="stylesheet" href="style.css?v=20261115b">
+<link rel="stylesheet" href="style.css?v=20261115c">
 </head>
 <body>
 <header class="top">
@@ -76,6 +76,7 @@
           </select>
         </label>
         <label class="field check"><input name="visual_review" type="checkbox" checked><span>Claude assiste aos candidatos <em>(revisão visual)</em></span></label>
+        <label class="field check clips-only"><input name="explore" type="checkbox"><span>+1 corte de exploração <em>(um tipo que o canal ainda testou pouco)</em></span></label>
       </div>
 
       <details class="advanced">
@@ -100,6 +101,9 @@
               <option value="medium">Whisper medium</option>
               <option value="small">Whisper small (rápido)</option>
             </select>
+          </label>
+          <label class="field"><span>Faixa de áudio da voz <em>(OBS com várias faixas)</em></span>
+            <select name="voice_track"><option value="0">Automática (faixa "mic"/"voz")</option><option value="1">Faixa 1</option><option value="2">Faixa 2</option><option value="3">Faixa 3</option><option value="4">Faixa 4</option><option value="5">Faixa 5</option><option value="6">Faixa 6</option></select>
           </label>
           <label class="field"><span>Estilo da legenda</span><select name="caption_preset" class="preset-select"></select></label>
           <label class="field"><span>Posição da legenda</span>
@@ -293,6 +297,12 @@
     <label class="check"><input id="apply-default" type="checkbox"> Usar como padrão nos próximos projetos</label>
     <button class="primary" id="apply-btn">Aplicar e renderizar todos</button>
     <p class="form-error" id="apply-error"></p>
+  </section>
+
+  <section id="quality" class="card hidden">
+    <div class="hl-script-head"><h2>Qualidade deste projeto</h2>
+      <span class="muted small">antes de postar · depois preencha as views em <code>_titulos/titulos.csv</code></span></div>
+    <div class="q-grid" id="q-grid"></div>
   </section>
 
   <section id="alts" class="card hidden">
@@ -605,6 +615,6 @@
   </div>
 </dialog>
 
-<script src="app.js?v=20261115b"></script>
+<script src="app.js?v=20261115c"></script>
 </body>
 </html>

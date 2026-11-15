@@ -178,6 +178,7 @@ LABELS = {
     "inicio": "🏁 começo de partida",
     "fim_do_tempo": "⏱ fim do tempo normal → prorrogação",
     "reacao": "📈 reação forte (volume muito acima do normal dele neste trecho da live)",
+    "marcador": "📌 O STREAMER MARCOU ESTE MOMENTO NO OBS (o lance costuma estar nos ~45 s antes)",
 }
 
 
@@ -190,6 +191,9 @@ def describe(event: dict) -> str:
         return f"[{event['t']:.2f}] <{LABELS[kind]}>"
     if kind == "reacao":
         return f"[{event['t']:.2f}] <{LABELS[kind]}: z={event.get('z', 0):.1f}>"
+    if kind == "marcador":
+        name = event.get("titulo") or ""
+        return f"[{event['t']:.2f}] <{LABELS[kind]}{': ' + name if name and not name.startswith('Unnamed') else ''}>"
     extra = f", +{event['db']:.0f} dB" if event["kind"] in LOUD_KINDS else ""
     if event["kind"] == "susto":
         extra += f", salto de {event.get('jump', 0):.0f} dB vindo de um trecho baixo"

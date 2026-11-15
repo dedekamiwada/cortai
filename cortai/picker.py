@@ -211,6 +211,9 @@ def build_prompt(transcript: dict, events: list[dict], duration: float, opts: di
     ]
     if extra:
         parts.append(f"Instruções extras do usuário: {extra}")
+    if any(e["kind"] == "marcador" and start <= e["t"] <= end for e in events):
+        parts.append("Os 📌 marcadores foram postos pelo próprio streamer durante a live: cada um deve virar um "
+                     "candidato (o momento marcado, não o segundo do atalho), salvo se não houver nada ali.")
     parts += ["", "<transcricao>", format_transcript(transcript, events, start, end), "</transcricao>", "",
               'Responda somente com JSON {"clips": [{"title", "start", "end", "peak", "hook", "reason", "score", "hashtags"}]}.']
     return "\n".join(parts)

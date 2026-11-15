@@ -96,7 +96,9 @@ _EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿]")
 _HASHTAG = re.compile(r"#\w+")
 
 _lock = threading.Lock()
-FIELDS = ["job", "n", "titulo", "formula", "caracteres", "views", "visualizado_pct", "observacao"]
+FIELDS = ["job", "n", "titulo", "formula", "caracteres", "views", "visualizado_pct", "observacao",
+          # sinais do corte (preenchidos pelo Cortaí) e mais métricas da plataforma (preenchidas por você)
+          "ancora", "duracao_s", "nota", "entende_sem_contexto", "assistido_pct", "compartilhamentos"]
 
 
 # ------------------------------------------------------------------ títulos novos para clipes prontos
@@ -252,6 +254,9 @@ def record(root: Path, job_id: str, clips: list[dict]) -> None:
             if row.get("titulo") != c["title"]:
                 row.update(titulo=c["title"], formula=c.get("title_formula") or "",
                            caracteres=str(len(c["title"])))
+            anchor = (c.get("anchor") or {}).get("kind") or "sem_ancora"
+            row.update(ancora=anchor, duracao_s=f"{c.get('out_duration') or c['end'] - c['start']:.0f}", nota=str(c.get("score", "")),
+                       entende_sem_contexto={True: "sim", False: "nao"}.get((c.get("estranho") or {}).get("entende"), ""))
         tmp = path.with_suffix(".tmp")
         try:
             with tmp.open("w", encoding="utf-8-sig", newline="") as f:
@@ -296,6 +301,60 @@ def performance(root: Path, min_posts: int = 3) -> list[tuple[str, float, int]]:
             by.setdefault(r["formula"], []).append(views)
     stats = [(f, statistics.median(v), len(v)) for f, v in by.items() if len(v) >= min_posts]
     return sorted(stats, key=lambda s: s[1], reverse=True)
+
+
+CLIP_GROUPS = {"gol_nosso": "gol do seu time", "gol_deles": "gol sofrido", "reacao": "reação forte sem gol",
+               "sem_ancora": "fala/situação sem evento de jogo"}
+
+
+def clip_performance(root: Path, min_posts: int = 3) -> list[tuple[str, float, int]]:
+    """Mediana de views por tipo de corte (âncora) e por duração, só dos grupos com `min_posts` posts medidos."""
+    try:
+        rows = _read(log_path(root))
+    except Exception:
+        return []
+    by: dict[str, list[float]] = {}
+    for r in rows:
+        views = _number(r.get("views", ""))
+        if views is None:
+            continue
+        if r.get("ancora"):
+            by.setdefault(f"tipo: {CLIP_GROUPS.get(r['ancora'], r['ancora'])}", []).append(views)
+        try:
+            d = float(r.get("duracao_s") or "")
+        except ValueError:
+            d = None
+        if d is not None:
+            bucket = "até 25 s" if d <= 25 else "26 a 40 s" if d <= 40 else "mais de 40 s"
+            by.setdefault(f"duração: {bucket}", []).append(views)
+        if r.get("entende_sem_contexto") in ("sim", "nao"):
+            by.setdefault(f"entende sem contexto: {r['entende_sem_contexto']}", []).append(views)
+    stats = [(g, statistics.median(v), len(v)) for g, v in by.items() if len(v) >= min_posts]
+    return sorted(stats, key=lambda s: s[1], reverse=True)
+
+
+def measured_counts(root: Path) -> dict[str, int]:
+    """Quantos posts com views preenchidas existem de cada tipo de corte (âncora)."""
+    try:
+        rows = _read(log_path(root))
+    except Exception:
+        return {}
+    out: dict[str, int] = {}
+    for r in rows:
+        if r.get("ancora") and _number(r.get("views", "")) is not None:
+            out[r["ancora"]] = out.get(r["ancora"], 0) + 1
+    return out
+
+
+def clip_guide(root: Path) -> str:
+    """Para a etapa de escolha: o que rendeu no canal (precisa de 2+ grupos medidos para comparar)."""
+    stats = clip_performance(root)
+    if len(stats) < 2:
+        return ""
+    lines = [f"- {g}: mediana de {v:,.0f} views em {n} posts".replace(",", ".") for g, v, n in stats]
+    return ("\n\nResultados reais dos cortes deste canal (do melhor para o pior):\n" + "\n".join(lines)
+            + "\nUse como desempate entre momentos de força parecida; não deixe de propor tipos menos testados "
+              "(o aprendizado precisa de variedade).")
 
 
 def guide(root: Path | None = None, options: bool = True) -> str:

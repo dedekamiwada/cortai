@@ -230,6 +230,7 @@ $("#job-form").addEventListener("submit", async (e) => {
     serie: f.serie.value.trim(), serie_n: f.serie_n.value ? +f.serie_n.value : null,
     range_start: parseTime(f.range_start.value), range_end: parseTime(f.range_end.value),
     language: f.language.value, backend: f.backend.value, whisper_model: f.whisper_model.value,
+    voice_track: +f.voice_track.value, explore: f.explore.checked,
     ...readFields(f, STYLE_FIELDS), ...readFields(f, COVER_FIELDS),
   };
   const body = new FormData();
@@ -268,6 +269,7 @@ const modeSelect = $("#job-form [name=mode]");
 const syncMode = () => {
   const hl = modeSelect.value === "highlights";
   $$(".hl-only").forEach((el) => el.classList.toggle("hidden", !hl));
+  $$(".clips-only").forEach((el) => el.classList.toggle("hidden", hl));
   $("#submit").textContent = hl ? "Gerar melhores momentos" : "Gerar cortes";
 };
 modeSelect.addEventListener("change", syncMode);
@@ -345,6 +347,7 @@ function renderJob(job) {
   $("#zip-btn").href = `/api/jobs/${job.id}/export.zip`;
   $("#covers-btn").classList.toggle("hidden", !job.clips.some((c) => c.status === "done" && !c.cover));
   renderMatches(job);
+  renderQuality(job);
   renderAlts(job);
   renderTimeline(job);
   renderHighlight(job);
@@ -402,6 +405,34 @@ $("#apply-btn").onclick = async () => {
     $("#apply-error").textContent = ex.message;
   }
 };
+
+// ---- qualidade do projeto (métricas antes de postar)
+const MOTIVOS = { punchline: "cortou o punchline", contexto: "sem contexto", momento: "momento errado", morto: "tempo morto", outro: "outro" };
+let qCache = { key: null, q: null };
+async function renderQuality(job) {
+  const card = $("#quality");
+  const ready = ["done", "error"].includes(job.status) && job.clips.some((c) => c.status === "done") && job.options.mode !== "highlights";
+  if (!ready) { card.classList.add("hidden"); return; }
+  const key = `${job.id}:${job.clips.map((c) => `${c.n}${c.status}${c.feedback?.veredito || ""}`).join(",")}`;
+  if (qCache.key !== key) {
+    try { qCache = { key, q: await api(`/api/jobs/${job.id}/qualidade`) }; } catch { return; }
+  }
+  const q = qCache.q;
+  if (!q || !q.cortes) { card.classList.add("hidden"); return; }
+  card.classList.remove("hidden");
+  const tiles = [
+    ["Ancorados num evento", `${q.ancorados}/${q.cortes}`, "gol, gol sofrido ou reação forte: lances que a transcrição esconde"],
+    ["Entendem sem contexto", q.estranho_testados ? `${q.estranho_ok}/${q.estranho_testados}` : "—",
+      q.contexto_tela ? `${q.contexto_tela} receberam texto de contexto na tela` : "teste cego: quem nunca viu a live entende?"],
+    ["Revisão", `${q.aprovados} ✓ · ${q.rejeitados} ✕`,
+      Object.entries(q.motivos).map(([k, v]) => `${MOTIVOS[k] || k}: ${v}`).join(" · ") || "aprove ou rejeite com A/R"],
+    ["Segundos até o lance", q.segundos_ate_lance ?? "—", "mediana; o contexto antes do lance fica entre 3 e 12 s"],
+    ["Partidas diferentes", q.partidas ?? "—", "variedade: no máximo 2 cortes por partida"],
+    ["Duração média", `${q.duracao_media_s} s`, q.pausas_removidas_s ? `${q.pausas_removidas_s} s de pausas removidas` : "sem remoção de pausas"],
+  ];
+  $("#q-grid").innerHTML = tiles.map(([t, v, s]) =>
+    `<div class="q-tile"><span class="muted small">${escapeHtml(t)}</span><b>${escapeHtml(String(v))}</b><span class="muted small">${escapeHtml(s)}</span></div>`).join("");
+}
 
 // ---- momentos que o Claude considerou e não entregou
 let altsCache = { key: null, list: [] };
@@ -810,6 +841,8 @@ function fillClip(el, c) {
   if (a && a.kind === "gol_nosso") sig.push(`<span class="chip accent">Gol ${escapeHtml(a.placar || "")}</span>`);
   else if (a && a.kind === "gol_deles") sig.push(`<span class="chip danger">Gol sofrido ${escapeHtml(a.placar || "")}</span>`);
   else if (a && a.kind === "reacao") sig.push(`<span class="chip info">Reação forte</span>`);
+  if (c.marcador) sig.push(`<span class="chip accent" title="Você marcou este momento no OBS">Seu marcador</span>`);
+  if (c.explorar) sig.push(`<span class="chip warn" title="Corte extra de um tipo pouco testado: poste e preencha as views para o Cortaí aprender">Exploração</span>`);
   if (c.estranho) sig.push(c.estranho.entende
     ? `<span class="chip">Entende sem contexto</span>`
     : c.contexto_tela

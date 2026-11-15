@@ -25,7 +25,7 @@ def _opts(raw: str) -> dict:
         raise HTTPException(400, "options inválido")
     allowed = set(jobs.DEFAULT_OPTS)
     opts = {k: v for k, v in data.items() if k in allowed}
-    for key in ("num_clips", "min_len", "max_len"):
+    for key in ("num_clips", "min_len", "max_len", "voice_track"):
         if key in opts:
             opts[key] = int(opts[key])
     for key in ("range_start", "range_end"):
@@ -328,6 +328,12 @@ async def redo_clip(job_id: str, n: int, request: Request):
     except (ValueError, KeyError) as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}
+
+
+@app.get("/api/jobs/{job_id}/qualidade")
+def job_quality(job_id: str):
+    _job_or_404(job_id)
+    return jobs.quality(job_id)
 
 
 @app.get("/api/jobs/{job_id}/timeline")
