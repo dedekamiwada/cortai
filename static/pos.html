@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí · Pós-edição</title>
-<link rel="stylesheet" href="style.css?v=20261115x">
+<link rel="stylesheet" href="style.css?v=20261116b">
 </head>
 <body>
 <header class="top">
@@ -97,6 +97,11 @@
         <div class="trilha-bar" id="trilha-bar"></div>
         <div id="trilha"></div>
       </div>
+      <div class="level-row">
+        <label class="inline-field">Equilibrar volume da voz
+          <select id="nivelar"><option value="off">Desligado</option><option value="suave">Suave</option><option value="medio">Médio (recomendado)</option><option value="forte">Forte</option></select></label>
+        <span class="muted small" id="nivelar-note"></span>
+      </div>
       <div class="pos-actions">
         <button class="primary" id="render-btn"><i class="ic ic-play"></i>Renderizar</button>
         <input id="replan-text" type="text" placeholder="Pedir outro plano: ex. menos efeitos, mais tensão no começo">
@@ -109,6 +114,17 @@
   <section class="pos-results hidden" id="results">
     <h2>Resultado</h2>
     <div class="pos-outs" id="outs"></div>
+    <div class="pos-cover" id="pos-cover">
+      <div class="pos-cover-thumb" id="pos-cover-thumb"><span class="muted small">Sem capa</span></div>
+      <div>
+        <h4>Capa do vídeo editado</h4>
+        <p class="muted small">Feita com quadros do vídeo final (com os efeitos). Sobe no “Editar capa” do TikTok/Reels.</p>
+        <div class="pos-actions">
+          <button class="secondary" id="pos-cover-btn"><i class="ic ic-image"></i>Fazer capa</button>
+          <a class="ghost hidden" id="pos-cover-dl" download><i class="ic ic-download"></i>Baixar capa</a>
+        </div>
+      </div>
+    </div>
   </section>
 </main>
 
@@ -120,7 +136,8 @@
   </article>
 </template>
 
-<script src="pos.js?v=20261115x"></script>
-<script src="pospreview.js?v=20261115x"></script>
+<script src="pos.js?v=20261116b"></script>
+<script src="pospreview.js?v=20261116b"></script>
+<script src="cover.js?v=20261116b"></script>
 </body>
 </html>

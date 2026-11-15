@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -25,7 +26,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import frames, jobs, media, memes, paths, picker, render, signals, transcribe, trilhas
+from . import capa, frames, jobs, media, memes, paths, picker, render, signals, transcribe, trilhas
 
 ROOT = paths.JOBS_DIR / "_posedit"
 CONFIG = ROOT / "config.json"
@@ -101,6 +102,78 @@ def _retire_generated(sfx: Path) -> None:
         keep.mkdir(exist_ok=True)
         for f in old:
             f.replace(keep / f.name)
+
+
+# ------------------------------------------------------------------ capa do vídeo editado
+def _final_video(p: dict) -> Path:
+    res = p.get("result") or {}
+    pick = res.get("com") or res.get("sem")
+    if p.get("status") != "done" or not pick:
+        raise ValueError("renderize a pós-edição antes de fazer a capa")
+    return paths.JOBS_DIR / pick["file"]
+
+
+def _cover_apex(p: dict, frames: list[Path]) -> int:
+    """Quadro sugerido: o do flash de texto (a maior reação do plano), senão o do zoom seco, senão o meio."""
+    beats = [b for b in (p.get("plan") or {}).get("beats", []) if b.get("on")]
+    for kind in ("flash_texto", "zoom_punch", "selo"):
+        hit = next((b for b in beats if b["tipo"] == kind), None)
+        if hit:
+            return capa.best_frame(frames, hit["t"] + (0.4 if kind == "flash_texto" else 0.2))
+    return capa.best_frame(frames, len(frames) * capa.FRAME_STEP / 2)
+
+
+def _cover_frames(pid: str) -> list[Path]:
+    """Quadros do vídeo editado (tirados de novo depois de cada render, que apaga os antigos)."""
+    p = get(pid)
+    d = _dir(pid)
+    found = capa.list_frames(d)
+    return found or capa.frames_from(_final_video(p), d)
+
+
+def cover_info(pid: str) -> dict:
+    p = get(pid)
+    if not p:
+        raise KeyError(pid)
+    cover = p.get("cover")
+    found = capa.list_frames(_dir(pid))
+    if cover and not found:  # render novo apagou os quadros: refaz a capa com os mesmos ajustes
+        save_cover(pid, {})
+        p, cover, found = get(pid), get(pid).get("cover"), capa.list_frames(_dir(pid))
+    return capa.editor_info(cover, [f"_posedit/{pid}/capa/quadros/{f.name}" for f in found],
+                            p.get("cover_file"), p.get("cover_rev", 0), p["name"], "editado", None,
+                            handle=jobs.defaults().get("cover_handle") or "")
+
+
+def save_cover(pid: str, changes: dict) -> dict:
+    """Gera (sem `changes`: quadro do maior efeito + título) ou salva a capa editada do vídeo pós-editado."""
+    p = get(pid)
+    if not p:
+        raise KeyError(pid)
+    found = _cover_frames(pid)
+    if not found:
+        raise RuntimeError("não deu para tirar os quadros do vídeo editado")
+    apex = _cover_apex(p, found)
+    old = p.get("cover")
+    params = {k: old[k] for k in capa.PARAM_KEYS if k in old} if old else \
+        capa.default_params({"title": re.sub(r"^\d+[\s._-]+", "", p["name"]), "keywords": []}, apex, found[apex], jobs.defaults())
+    if changes:
+        params = capa.clean_params(changes, params)
+    params["frame"] = min(params.get("frame", apex), len(found) - 1)
+    out = capa.render(found[params["frame"]], params, _dir(pid) / "capa" / "capa.jpg")
+    update(pid, cover={**params, "apex": apex, "frames": len(found)}, cover_rev=p.get("cover_rev", 0) + 1,
+           cover_file=f"_posedit/{pid}/capa/{out.name}")
+    return get(pid)
+
+
+def preview_cover(pid: str, changes: dict) -> Path:
+    p = get(pid)
+    if not p or not p.get("cover"):
+        raise ValueError("a capa ainda não foi gerada")
+    found = capa.list_frames(_dir(pid))
+    params = capa.clean_params(changes, p["cover"])
+    frame = found[min(params["frame"], len(found) - 1)]
+    return capa.render(frame, params, _dir(pid) / "capa" / f"previa_{threading.get_ident()}.jpg", preview=True)
 
 
 def library_file(rel: str) -> Path:
@@ -491,8 +564,11 @@ def normalize_plan(raw: dict, dur: float, words: list[dict], lib: dict) -> dict:
 
 # ------------------------------------------------------------------ render
 
+NIVELAR = ("off", "suave", "medio", "forte")
+
+
 def start_render(pid: str, off: list[int], off_trilha: list[int], textos: dict, tempos: dict | None = None,
-                 musicas: dict | None = None) -> None:
+                 musicas: dict | None = None, nivelar: str | None = None) -> None:
     p = get(pid)
     if not p or p["status"] not in ("ready", "done", "error") or not p.get("plan"):
         raise ValueError("o plano ainda não está pronto")
@@ -522,7 +598,8 @@ def start_render(pid: str, off: list[int], off_trilha: list[int], textos: dict, 
             s["pasta"], s["arquivo"] = (pasta, nome) if ok else (s["clima"], "")
         if s["arquivo"] and not (lib / "musicas" / s.get("pasta", s["clima"]) / s["arquivo"]).is_file():
             s["arquivo"], s["fonte"] = "", "mudo"
-    update(pid, plan=plan, status="rendering", progress=0.0, message="Renderizando…", error=None)
+    level = nivelar if nivelar in NIVELAR else p.get("nivelar", "medio")
+    update(pid, plan=plan, nivelar=level, status="rendering", progress=0.0, message="Renderizando…", error=None)
     _worker.submit(_guard, pid, _render)
 
 
@@ -676,7 +753,7 @@ def _render_audio(pid: str, plan: dict, meta: dict, sem: Path, com: Path) -> boo
     fim = plan["fim"]
     inputs = ["-i", str(Path(_projects[pid]["source"]["path"]))]
     graph = []
-    voice = render.VOICE_CHAIN if jobs.defaults().get("voice_enhance", True) else "anull"
+    voice = render.voice_chain(jobs.defaults().get("voice_enhance", True), _projects[pid].get("nivelar", "medio"))
     if meta.get("has_audio"):
         graph.append(f"[0:a:0]atrim=0:{fim:.3f},asetpts=PTS-STARTPTS,{voice},aresample=48000,"
                      f"aformat=channel_layouts=stereo,apad=whole_dur={fim:.3f}[voz]")
@@ -783,6 +860,7 @@ def _render(pid: str) -> None:
     for f in d.glob("musica-*.wav"):
         f.unlink(missing_ok=True)
     result["thumb"] = f"_posedit/{pid}/thumb.jpg"
+    shutil.rmtree(capa.frames_dir(d), ignore_errors=True)
     update(pid, status="done", progress=1.0, result=result, rev=p.get("rev", 0) + 1,
            message="Pronto" + ("" if has_music else " (sem música na biblioteca para estes climas: só a versão sem trilha)"))
 

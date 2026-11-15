@@ -147,5 +147,30 @@
   });
   bar.addEventListener("input", () => { if (video.duration) video.currentTime = (+bar.value / 1000) * video.duration; });
 
-  window.posPreview = { setPlan(p) { plan = p; frame(video.currentTime); }, seek(t) { video.currentTime = Math.max(0, t); } };
+  // aproximação do nivelador na prévia (WebAudio): compressor suave/médio/forte com ganho de compensação.
+  // O render usa o dynaudnorm do ffmpeg; aqui é só para ouvir a diferença antes de renderizar.
+  let ctx = null, comp = null, gain = null, level = "medio";
+  const LEVEL_PV = { off: null, suave: [3, 3], medio: [5, 5], forte: [8, 7] };
+  function applyLevel() {
+    if (!ctx) return;
+    const cfg = LEVEL_PV[level];
+    comp.threshold.value = cfg ? -34 : 0; comp.ratio.value = cfg ? cfg[0] : 1;
+    gain.gain.value = cfg ? Math.pow(10, cfg[1] / 20) : 1;
+  }
+  video.addEventListener("play", () => {
+    if (ctx) { ctx.resume(); return; }
+    try {
+      ctx = new AudioContext();
+      const src = ctx.createMediaElementSource(video);
+      comp = ctx.createDynamicsCompressor(); comp.knee.value = 12; comp.attack.value = 0.01; comp.release.value = 0.3;
+      gain = ctx.createGain();
+      const limit = ctx.createDynamicsCompressor(); limit.threshold.value = -2; limit.ratio.value = 20; limit.attack.value = 0.002;
+      src.connect(comp).connect(gain).connect(limit).connect(ctx.destination);
+      applyLevel();
+    } catch { ctx = null; }  // sem WebAudio: a prévia toca o som original
+  });
+  window.posPreview = {
+    setPlan(p) { plan = p; frame(video.currentTime); }, seek(t) { video.currentTime = Math.max(0, t); },
+    setLevel(l) { level = l; applyLevel(); },
+  };
 })();

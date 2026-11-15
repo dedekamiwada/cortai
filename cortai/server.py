@@ -599,6 +599,39 @@ def pos_source(pid: str):
     return FileResponse(path)
 
 
+@app.get("/api/pos/{pid}/capa")
+async def pos_cover_info(pid: str):
+    _pos_or_404(pid)
+    try:
+        return await run_in_threadpool(posedit.cover_info, pid)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/pos/{pid}/capa")
+async def pos_cover_save(pid: str, request: Request):
+    """Gera (corpo vazio) ou salva a capa do vídeo pós-editado."""
+    _pos_or_404(pid)
+    body = await request.json()
+    try:
+        await run_in_threadpool(posedit.save_cover, pid, body)
+        return await run_in_threadpool(posedit.cover_info, pid)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/pos/{pid}/capa/previa")
+async def pos_cover_preview(pid: str, request: Request):
+    _pos_or_404(pid)
+    try:
+        path = await run_in_threadpool(posedit.preview_cover, pid, await request.json())
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+    data = path.read_bytes()
+    path.unlink(missing_ok=True)
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/pos/{pid}/musicas")
 def pos_music(pid: str):
     _pos_or_404(pid)
@@ -612,7 +645,7 @@ async def pos_render(pid: str, request: Request):
     try:
         posedit.start_render(pid, [int(i) for i in body.get("off") or []],
                              [int(i) for i in body.get("off_trilha") or []], body.get("textos") or {},
-                             body.get("tempos") or {}, body.get("musicas") or {})
+                             body.get("tempos") or {}, body.get("musicas") or {}, body.get("nivelar"))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}

@@ -38,10 +38,21 @@ LOUDNESS, TRUE_PEAK = -14, -2.0  # TikTok/Reels/Shorts; pico com folga porque o 
 # depois só acerta a média). Medido em 3 trechos de 60 s da live: variação de volume (LRA) 9,1 → 5,7 LU, distância
 # fala alta × baixa 7,0 → 4,3 dB, chiado nas pausas +2 dB, sem atraso de áudio. speechnorm e versões mais fortes
 # equilibravam menos ou subiam o chiado 4–5 dB.
-VOICE_CHAIN = ("highpass=f=85,equalizer=f=250:t=q:w=1.2:g=-3,equalizer=f=3200:t=q:w=1.0:g=4,"
-               "highshelf=f=9000:g=2,acompressor=threshold=-22dB:ratio=4:attack=4:release=150:makeup=6dB:knee=4,"
-               "alimiter=limit=0.84:attack=2:release=60:level=disabled,"
-               "dynaudnorm=f=200:g=13:p=0.9:m=10:r=0.28:s=10")
+VOICE_BASE = ("highpass=f=85,equalizer=f=250:t=q:w=1.2:g=-3,equalizer=f=3200:t=q:w=1.0:g=4,"
+              "highshelf=f=9000:g=2,acompressor=threshold=-22dB:ratio=4:attack=4:release=150:makeup=6dB:knee=4,"
+              "alimiter=limit=0.84:attack=2:release=60:level=disabled")
+# intensidades medidas (LRA / fala alta×baixa / chiado nas pausas): suave 7,2 LU / 5,2 dB / +1,5;
+# médio 5,7 / 4,3 / +2; forte 4,7 / 3,6 / +4 (antes: 9,1 / 7,0)
+LEVELERS = {"suave": "dynaudnorm=f=250:g=15:p=0.9:m=8:r=0.25:s=12",
+            "medio": "dynaudnorm=f=200:g=13:p=0.9:m=10:r=0.28:s=10",
+            "forte": "dynaudnorm=f=150:g=11:p=0.9:m=12:r=0.3:s=8"}
+VOICE_CHAIN = f"{VOICE_BASE},{LEVELERS['medio']}"
+
+
+def voice_chain(enhance: bool, level: str = "medio") -> str:
+    """Voz tratada (EQ + compressor) e/ou nivelador na intensidade pedida ("off" desliga só o nivelador)."""
+    parts = ([VOICE_BASE] if enhance else []) + ([LEVELERS[level]] if level in LEVELERS else [])
+    return ",".join(parts) or "anull"
 _encoder: list[str] | None = None
 
 

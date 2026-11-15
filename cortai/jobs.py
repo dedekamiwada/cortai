@@ -1576,16 +1576,12 @@ def cover_info(job_id: str, n: int) -> dict:
     clip = job["clips"][_clip_index(job, n)]
     d = _clip_dir(job_id, clip)
     found = capa.list_frames(d)
-    return {
-        "cover": clip.get("cover"), "file": clip.get("cover_file"), "rev": clip.get("cover_rev", 0),
-        "frames": [f"{job_id}/clips/{clip['n']:02d}/capa/quadros/{f.name}" for f in found],
-        "step": capa.FRAME_STEP, "origin": clip.get("cover_origin") or ("render" if found else None),
-        "in_video": _cover_in_video(job, clip), "title": clip["title"],
-        "title_options": [o["title"] for o in clip.get("title_options") or [] if not o.get("problems")],
-        "styles": {k: v["label"] for k, v in capa.STYLES.items()},
-        "style_colors": {k: {"text": v["text"], "hl": v["hl"]} for k, v in capa.STYLES.items()},
-        "handle": job["options"].get("cover_handle") or "",
-    }
+    return capa.editor_info(
+        clip.get("cover"), [f"{job_id}/clips/{clip['n']:02d}/capa/quadros/{f.name}" for f in found],
+        clip.get("cover_file"), clip.get("cover_rev", 0), clip["title"],
+        clip.get("cover_origin") or ("render" if found else None), _cover_in_video(job, clip),
+        [o["title"] for o in clip.get("title_options") or [] if not o.get("problems")],
+        job["options"].get("cover_handle") or "")
 
 
 def save_cover(job_id: str, n: int, changes: dict) -> dict:

@@ -170,6 +170,7 @@ function renderProject(p, first) {
 
   $("#plan").classList.toggle("hidden", !p.plan);
   $("#render-btn").disabled = busy;
+  if (document.activeElement !== $("#nivelar")) { $("#nivelar").value = p.nivelar || "medio"; nivelarNote(); }
   $("#replan-btn").disabled = busy;
   // não redesenha a tabela durante o render: o usuário pode estar olhando
   if (p.plan && (first || !busy || !$("#beats").children.length)) renderPlan(p.plan);
@@ -278,7 +279,29 @@ async function renderTrilha(plan) {
   window.posPreview?.setPlan(plan);
 }
 
+function renderPosCover(p) {
+  const has = !!p.cover_file;
+  const src = has ? `/media/${p.cover_file}?v=${p.cover_rev || 0}` : "";
+  $("#pos-cover-thumb").innerHTML = has ? `<img alt="Capa" src="${src}">` : `<span class="muted small">Sem capa</span>`;
+  $("#pos-cover-btn").lastChild.textContent = has ? "Editar capa" : "Fazer capa";
+  const dl = $("#pos-cover-dl");
+  dl.classList.toggle("hidden", !has);
+  if (has) Object.assign(dl, { href: src, download: `${p.name.replace(/[^\p{L}\p{N} _-]/gu, "").slice(0, 60)} - capa.jpg` });
+}
+$("#pos-cover-btn").onclick = () => {
+  const p = current;
+  if (!p) return;
+  openCover(`/api/pos/${p.id}`, {
+    heading: "Capa do vídeo editado",
+    inVideo: false,
+    download: `${p.name.replace(/[^\p{L}\p{N} _-]/gu, "").slice(0, 60)} - capa.jpg`,
+    onSaved: () => openProject(p.id),
+  });
+};
+$("#pos-cover-thumb").onclick = () => $("#pos-cover-btn").click();
+
 function renderResults(p) {
+  renderPosCover(p);
   const outs = [["com", "Com trilha"], ["sem", "Sem trilha (para a música do TikTok)"]]
     .filter(([k]) => p.result[k]);
   $("#outs").replaceChildren(...outs.map(([k, label]) => {
@@ -306,7 +329,7 @@ $("#render-btn").onclick = async () => {
     const tt = parseHms($("input.t-in", tr)?.value); if (!isNaN(tt)) tempos[tr.dataset.id] = tt;
   });
   try {
-    await postJSON(`/api/pos/${current.id}/render`, { off, off_trilha: offTrilha, textos, tempos, musicas });
+    await postJSON(`/api/pos/${current.id}/render`, { off, off_trilha: offTrilha, textos, tempos, musicas, nivelar: $("#nivelar").value });
     openProject(current.id);
   } catch (ex) { $("#plan-error").textContent = ex.message; }
 };
@@ -325,6 +348,16 @@ $("#proj-delete").onclick = async () => {
 };
 
 route();
+
+// equilibrar o volume da voz: o que cada nível faz (medido na live: variação 9,1 LU sem nivelar)
+const NIVELAR_NOTE = {
+  off: "A voz sai com a variação original: grito bem mais alto que a fala baixa.",
+  suave: "Variação 9,1 → 7,2 LU. Mexe pouco; o chiado das pausas quase não muda.",
+  medio: "Variação 9,1 → 5,7 LU; fala alta × baixa 7,0 → 4,3 dB. O chiado das pausas sobe 2 dB.",
+  forte: "Variação 9,1 → 4,7 LU, o mais uniforme. O chiado das pausas sobe 4 dB: bom para live com fundo limpo.",
+};
+function nivelarNote() { $("#nivelar-note").textContent = `${NIVELAR_NOTE[$("#nivelar").value] || ""} A prévia toca uma aproximação.`; }
+$("#nivelar").onchange = () => { nivelarNote(); window.posPreview?.setLevel($("#nivelar").value); };
 
 // usados pelo preview (pospreview.js)
 window.parseHms = parseHms;

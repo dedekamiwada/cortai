@@ -389,22 +389,38 @@ def list_frames(clip_dir: Path) -> list[Path]:
     return sorted(frames_dir(clip_dir).glob("*.jpg"))
 
 
-def extract_frames(src: Path, start: float, dur: float, clip_dir: Path, vertical_source: bool) -> str:
-    """Para clipes renderizados antes da capa existir. Live vertical: tira do vídeo original (sem
-    legenda). Horizontal: do clipe pronto (com o que estiver gravado nele). Devolve a origem usada."""
+def frames_from(video: Path, clip_dir: Path, start: float = 0.0, dur: float | None = None) -> list[Path]:
+    """Quadros (1 a cada FRAME_STEP s, 9:16) de `video` em clip_dir/capa/quadros, para escolher a capa."""
     d = frames_dir(clip_dir)
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True, exist_ok=True)
     vf = f"fps={1 / FRAME_STEP:g},scale={FRAME_W}:{FRAME_H}:force_original_aspect_ratio=increase,crop={FRAME_W}:{FRAME_H}"
+    cmd = ["ffmpeg", "-y", "-v", "error", *(["-ss", f"{start:.3f}"] if start else []), "-i", str(video),
+           *(["-t", f"{dur:.3f}"] if dur else []), "-vf", vf, "-q:v", "3", "-start_number", "0", str(d / "%04d.jpg")]
+    subprocess.run(cmd, capture_output=True)
+    return list_frames(clip_dir)
+
+
+def extract_frames(src: Path, start: float, dur: float, clip_dir: Path, vertical_source: bool) -> str:
+    """Para clipes renderizados antes da capa existir. Live vertical: tira do vídeo original (sem
+    legenda). Horizontal: do clipe pronto (com o que estiver gravado nele). Devolve a origem usada."""
     if vertical_source:
-        cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}"]
-        origin = "original"
-    else:
-        cmd = ["ffmpeg", "-y", "-v", "error", "-i", "clip.mp4"]
-        origin = "clipe"
-    subprocess.run(cmd + ["-vf", vf, "-q:v", "3", "-start_number", "0", "capa/quadros/%04d.jpg"],
-                   cwd=clip_dir, capture_output=True)
-    return origin
+        frames_from(src, clip_dir, start, dur)
+        return "original"
+    frames_from(clip_dir / "clip.mp4", clip_dir)
+    return "clipe"
+
+
+def editor_info(params: dict, frames: list[str], file: str, rev: int, title: str, origin: str, in_video: bool | None,
+                title_options: list[str] | None = None, handle: str = "") -> dict:
+    """O que o editor de capa recebe (igual para clipe de corte e para pós-edição)."""
+    return {
+        "cover": params, "file": file, "rev": rev, "frames": frames, "step": FRAME_STEP, "origin": origin,
+        "in_video": in_video, "title": title, "title_options": title_options or [],
+        "styles": {k: v["label"] for k, v in STYLES.items()},
+        "style_colors": {k: {"text": v["text"], "hl": v["hl"]} for k, v in STYLES.items()},
+        "handle": handle,
+    }
 
 
 def apex_time(clip: dict, loud_events: list[dict] | None = None) -> float:
