@@ -233,7 +233,7 @@ def _analyze(pid: str) -> None:
     lib = library()
     update(pid, status="planning", message="Claude assistindo e montando os beats…")
     raw = picker.ask(backend, SYSTEM, build_prompt(dur, words, events, lib, p.get("instructions", "")),
-                     SCHEMA, images=sheets)
+                     SCHEMA, images=sheets, step="posedicao_plano")
     (d / "plan-raw.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     plan = normalize_plan(raw, dur, words, lib)
     update(pid, status="ready", message="Plano pronto: revise os beats e renderize", plan=plan,

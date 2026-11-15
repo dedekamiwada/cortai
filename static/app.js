@@ -88,6 +88,7 @@ async function loadConfig() {
     // padrões (de fábrica + os salvos pelo usuário) no formulário e no painel "estilo de todos"
     fillFields($("#job-form"), cfg.defaults);
     fillFields($("#apply-form"), cfg.defaults);
+    $("#match-serie").value = cfg.defaults.serie || "";
   } catch {}
 }
 
@@ -226,6 +227,7 @@ $("#job-form").addEventListener("submit", async (e) => {
     instructions: f.instructions.value, content_type: f.content_type.value, style_id: f.style_id.value,
     visual_review: f.visual_review.checked, layout: f.layout.value,
     mode: f.mode.value, highlight_basis: f.highlight_basis.value,
+    serie: f.serie.value.trim(), serie_n: f.serie_n.value ? +f.serie_n.value : null,
     range_start: parseTime(f.range_start.value), range_end: parseTime(f.range_end.value),
     language: f.language.value, backend: f.backend.value, whisper_model: f.whisper_model.value,
     ...readFields(f, STYLE_FIELDS), ...readFields(f, COVER_FIELDS),
@@ -343,6 +345,8 @@ function renderJob(job) {
   $("#zip-btn").href = `/api/jobs/${job.id}/export.zip`;
   $("#covers-btn").classList.toggle("hidden", !job.clips.some((c) => c.status === "done" && !c.cover));
   renderMatches(job);
+  renderAlts(job);
+  renderTimeline(job);
   renderHighlight(job);
   renderClips(job);
 }
@@ -399,6 +403,113 @@ $("#apply-btn").onclick = async () => {
   }
 };
 
+// ---- momentos que o Claude considerou e não entregou
+let altsCache = { key: null, list: [] };
+async function renderAlts(job) {
+  const card = $("#alts");
+  const ready = ["done", "error"].includes(job.status) && job.clips.length;
+  if (!ready) { card.classList.add("hidden"); return; }
+  const key = `${job.id}:${job.clips.map((c) => `${c.n}-${c.start}-${c.end}`).join(",")}`;
+  if (altsCache.key !== key) {
+    try { altsCache = { key, list: await api(`/api/jobs/${job.id}/alternativas`) }; } catch { return; }
+  }
+  const list = altsCache.list;
+  card.classList.toggle("hidden", !list.length);
+  $("#alts-count").textContent = list.length ? `${list.length} momento${list.length > 1 ? "s" : ""}` : "";
+  $("#alt-list").replaceChildren(...list.map((a) => {
+    const row = document.createElement("div");
+    row.className = "alt";
+    row.innerHTML = `<span class="score"></span><div class="alt-main"><b class="alt-title"></b>
+      <span class="muted small alt-meta"></span><p class="alt-why"></p></div>
+      <button class="secondary small alt-use"><i class="ic ic-plus"></i>Usar este</button>`;
+    const sc = $(".score", row);
+    sc.textContent = a.score;
+    sc.className = `score ${a.score >= 75 ? "" : a.score >= 50 ? "mid" : "low"}`;
+    $(".alt-title", row).textContent = a.title || "Momento sem título";
+    $(".alt-meta", row).textContent = `${fmtTime(a.start)} → ${fmtTime(a.end)} · ${Math.round(a.end - a.start)} s · ${a.situacao}`;
+    $(".alt-why", row).textContent = a.visual || a.reason;
+    $(".alt-use", row).onclick = async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        await postJSON(`/api/jobs/${job.id}/alternativas/${a.id}`, {});
+        altsCache.key = null;
+        openJob(job.id);
+      } catch (ex) { alert(ex.message); e.currentTarget.disabled = false; }
+    };
+    return row;
+  }));
+}
+
+// ---- linha do tempo de eventos (placar + reações + cortes)
+let tlCache = { key: null, data: null };
+async function renderTimeline(job) {
+  const card = $("#timeline");
+  const ready = ["done", "error", "waiting_match"].includes(job.status) && job.options.mode !== "highlights";
+  if (!ready) { card.classList.add("hidden"); return; }
+  const key = `${job.id}:${job.clips.map((c) => `${c.n}-${c.start}-${c.end}`).join(",")}`;
+  if (tlCache.key !== key) {
+    try { tlCache = { key, data: await api(`/api/jobs/${job.id}/timeline`) }; } catch { return; }
+  }
+  const t = tlCache.data;
+  const has = t.eventos.length || t.reacoes.length;
+  card.classList.toggle("hidden", !has || !t.duration);
+  if (!has || !t.duration) return;
+  const PX = 2.2;  // px por segundo: 1 h ≈ 8 mil px, rola na horizontal
+  const track = $("#tl-track");
+  track.style.width = `${Math.ceil(t.duration * PX)}px`;
+  const mk = (cls, x, w, title, data) => {
+    const el = document.createElement("button");
+    el.className = `tl-m ${cls}`;
+    el.style.left = `${x * PX}px`;
+    if (w) el.style.width = `${Math.max(3, w * PX)}px`;
+    el.title = title;
+    if (data) el.onclick = (e) => openTlPop(e, data);
+    return el;
+  };
+  const items = [];
+  for (let s = 0; s < t.duration; s += 600) {
+    const tick = document.createElement("span");
+    tick.className = "tl-tick"; tick.style.left = `${s * PX}px`; tick.textContent = fmtTime(s);
+    items.push(tick);
+  }
+  t.partidas.forEach((s) => items.push(mk("tl-match", s, 0, `Começo de partida ~${fmtTime(s)}`)));
+  t.cortes.forEach((c) => items.push(mk("tl-cut", c.start, c.end - c.start, `Corte ${c.n}: ${c.title}`)));
+  t.reacoes.forEach((r) => items.push(mk("tl-reacao", r.t, 0, `Reação forte (z=${r.z}) ${fmtTime(r.t)}`,
+    { t: r.t, title: "Reação forte", sub: `z=${r.z} · ${fmtTime(r.t)}` })));
+  t.eventos.forEach((e) => {
+    const nosso = e.tipo === "gol_nosso", deles = e.tipo === "gol_deles";
+    const title = nosso ? `Seu gol ${e.placar}` : deles ? `Gol sofrido ${e.placar}` : "Fim do tempo normal";
+    items.push(mk(nosso ? "tl-nosso" : deles ? "tl-deles" : "tl-fim", e.t, 0, `${title} · ${fmtTime(e.t)}`,
+      { t: e.t, title, sub: `${fmtTime(e.t)}${e.relogio ? ` · relógio ${e.relogio}` : ""}` }));
+  });
+  track.replaceChildren(...items);
+}
+let tlPopAt = null;
+function openTlPop(e, data) {
+  e.stopPropagation();
+  tlPopAt = data;
+  const pop = $("#tl-pop");
+  $("#tl-pop-title").textContent = data.title;
+  $("#tl-pop-sub").textContent = data.sub;
+  const card = $("#timeline").getBoundingClientRect();
+  const r = e.currentTarget.getBoundingClientRect();
+  pop.style.left = `${Math.min(card.width - 240, Math.max(8, r.left - card.left - 100))}px`;
+  pop.classList.remove("hidden");
+}
+document.addEventListener("click", (e) => { if (!e.target.closest("#tl-pop")) $("#tl-pop").classList.add("hidden"); });
+$("#tl-pop-create").onclick = async (e) => {
+  if (!tlPopAt) return;
+  e.currentTarget.disabled = true;
+  try {
+    // 10 s de contexto antes do lance e 8 s para a reação (mesmas bordas do motor de cortes)
+    const clip = await postJSON(`/api/jobs/${currentJob.id}/clips`, { start: tlPopAt.t - 10, end: tlPopAt.t + 8 });
+    $("#tl-pop").classList.add("hidden");
+    await openJob(currentJob.id);
+    openEditor(currentJob.id, clip.n);
+  } catch (ex) { alert(ex.message); }
+  e.currentTarget.disabled = false;
+};
+
 // ---- partidas da live
 const RESULT = { vitoria: ["Vitória", "accent"], derrota: ["Derrota", "danger"], empate: ["Empate", "warn"],
   desconhecido: ["Sem resultado", ""] };
@@ -441,7 +552,8 @@ $("#match-go").onclick = async (e) => {
   const made = [];
   for (const n of picked) {
     try {
-      const r = await postJSON(`/api/jobs/${currentJob.id}/partidas/${n}`, { basis: $("#match-basis").value });
+      const r = await postJSON(`/api/jobs/${currentJob.id}/partidas/${n}`,
+        { basis: $("#match-basis").value, serie: $("#match-serie").value.trim() });
       made.push(`<a href="#/job/${r.id}">partida ${n}</a>`);
     } catch (ex) { made.push(`partida ${n}: ${escapeHtml(ex.message)}`); }
   }
@@ -465,6 +577,9 @@ async function renderHighlight(job) {
   panel.classList.toggle("hidden", !hl);
   if (!hl) return;
   $("#hl-title").textContent = hl.titulo || "Melhores momentos";
+  const busy = BUSY.has(job.status);
+  $("#hl-ask-btn").disabled = busy;
+  $("#hl-ask-reply").textContent = hl.pedido ? `Último pedido: “${hl.pedido.instrucao}” — ${hl.pedido.resposta}` : "";
   $("#hl-post").textContent = hl.post || "";
   $("#hl-compile").disabled = BUSY.has(job.status);
   for (const el of $$(".hl-out", panel)) {
@@ -487,15 +602,171 @@ async function renderHighlight(job) {
   showScript();
 }
 function showScript() {
+  const box = $("#hl-script");
+  if (document.activeElement === box) return;  // não apaga o que você está editando no meio do polling
   const s = hlScripts[$("#hl-script-pick").value];
-  $("#hl-script").textContent = s ? s.text : "O roteiro aparece quando os vídeos ficarem prontos.";
+  box.value = s ? s.text : "";
+  box.placeholder = "O roteiro aparece quando os vídeos ficarem prontos.";
 }
+$("#hl-save-script").onclick = async (e) => {
+  const key = $("#hl-script-pick").value;
+  const btn = e.currentTarget;
+  try {
+    await postJSON(`/api/jobs/${currentJob.id}/roteiro/${key}`, { texto: $("#hl-script").value });
+    delete hlScripts[key];
+    btn.lastChild.textContent = "Salvo!";
+    setTimeout(() => (btn.lastChild.textContent = "Salvar roteiro"), 1500);
+    openJob(currentJob.id);
+  } catch (ex) { alert(ex.message); }
+};
 $("#hl-script-pick").onchange = showScript;
 $("#hl-copy").onclick = async (e) => {
-  await navigator.clipboard.writeText($("#hl-script").textContent);
+  await navigator.clipboard.writeText($("#hl-script").value);
   e.target.textContent = "Copiado!";
   setTimeout(() => (e.target.textContent = "Copiar"), 1500);
 };
+// ---- editor da partida: assistir à partida e escolher os trechos do resumo
+const me = { data: null, sel: null };
+const meVideo = $("#me-video");
+const meAbs = () => (me.data ? me.data.start + meVideo.currentTime : 0);  // segundo da live original
+const meSeek = (t) => { if (me.data) meVideo.currentTime = Math.max(0, t - me.data.start); };
+async function openMatchEditor() {
+  const dlg = $("#match-ed");
+  dlg.showModal();
+  $("#me-loading").classList.remove("hidden");
+  $("#me-body").classList.add("hidden");
+  try {
+    me.data = await api(`/api/jobs/${currentJob.id}/partida`);
+  } catch (ex) { $("#me-loading").textContent = ex.message; return; }
+  meVideo.src = `/media/${me.data.file}`;
+  $("#me-loading").classList.add("hidden");
+  $("#me-body").classList.remove("hidden");
+  me.sel = null;
+  drawMatch();
+  selectLance(null);
+}
+function drawMatch() {
+  const { start, end, eventos } = me.data;
+  const span = end - start;
+  const pct = (t) => `${((t - start) / span) * 100}%`;
+  const tl = $("#me-tl");
+  const items = [$("#me-head")];
+  for (const c of [...currentJob.clips].sort((a, b) => a.start - b.start)) {
+    const seg = document.createElement("button");
+    seg.className = `me-seg ${c.no_short ? "short" : "only-h"} ${me.sel === c.n ? "sel" : ""}`;
+    seg.style.left = pct(c.start);
+    seg.style.width = `${((c.end - c.start) / span) * 100}%`;
+    seg.title = `${c.title} (${fmtTime(c.start)}–${fmtTime(c.end)})`;
+    seg.onclick = (e) => { e.stopPropagation(); selectLance(c.n); meSeek(c.start); };
+    items.push(seg);
+  }
+  for (const e of eventos) {
+    const m = document.createElement("span");
+    m.className = `me-goal ${e.tipo}`;
+    m.style.left = pct(e.t);
+    m.title = `${e.tipo === "gol_nosso" ? "Seu gol" : e.tipo === "gol_deles" ? "Gol sofrido" : "Fim do tempo"} ${e.placar || ""}`;
+    items.push(m);
+  }
+  const ns = parseFloat($("#me-new-start").value), ne = parseFloat($("#me-new-end").value);
+  if (ns && ne && ne > ns) {
+    const mark = document.createElement("span");
+    mark.className = "me-mark"; mark.style.left = pct(ns); mark.style.width = `${((ne - ns) / span) * 100}%`;
+    items.push(mark);
+  }
+  tl.replaceChildren(...items);
+  tl.onclick = (e) => {
+    const r = tl.getBoundingClientRect();
+    meSeek(start + ((e.clientX - r.left) / r.width) * span);
+  };
+}
+function selectLance(n) {
+  me.sel = n;
+  const c = currentJob.clips.find((x) => x.n === n);
+  $("#me-sel-empty").classList.toggle("hidden", !!c);
+  $("#me-sel-body").classList.toggle("hidden", !c);
+  if (c) {
+    $("#me-sel-title").textContent = c.title;
+    $("#me-sel-start").value = c.start.toFixed(1);
+    $("#me-sel-end").value = c.end.toFixed(1);
+    $("#me-sel-short").checked = !!c.no_short;
+  }
+  if (me.data) drawMatch();
+}
+meVideo.addEventListener("timeupdate", () => {
+  if (!me.data) return;
+  const t = meAbs();
+  $("#me-time").textContent = `${fmtTime(t, true)} da live`;
+  $("#me-head").style.left = `${((t - me.data.start) / (me.data.end - me.data.start)) * 100}%`;
+  if (me.stopAt && t >= me.stopAt) { meVideo.pause(); me.stopAt = null; }
+});
+$("#me-play").onclick = () => (meVideo.paused ? meVideo.play() : meVideo.pause());
+meVideo.addEventListener("play", () => ($("#me-play").textContent = "Pausar"));
+meVideo.addEventListener("pause", () => ($("#me-play").textContent = "Tocar"));
+$("#me-back").onclick = () => meSeek(meAbs() - 5);
+$("#me-fwd").onclick = () => meSeek(meAbs() + 5);
+$("#me-sel-in").onclick = () => ($("#me-sel-start").value = meAbs().toFixed(1));
+$("#me-sel-out").onclick = () => ($("#me-sel-end").value = meAbs().toFixed(1));
+$("#me-sel-play").onclick = () => { meSeek(+$("#me-sel-start").value); me.stopAt = +$("#me-sel-end").value; meVideo.play(); };
+const meErr = (msg) => ($("#me-error").textContent = msg || "");
+async function meRefresh() {
+  currentJob = await api(`/api/jobs/${currentJob.id}`);
+  drawMatch();
+  renderJob(currentJob);
+}
+$("#me-sel-short").onchange = async (e) => {
+  try { await postJSON(`/api/jobs/${currentJob.id}/clips/${me.sel}/lance`, { no_short: e.target.checked }); meErr(); await meRefresh(); }
+  catch (ex) { meErr(ex.message); }
+};
+$("#me-sel-save").onclick = async () => {
+  const s = +$("#me-sel-start").value, e = +$("#me-sel-end").value;
+  if (!(e - s >= 1)) return meErr("o trecho precisa ter pelo menos 1 segundo");
+  try { await postJSON(`/api/jobs/${currentJob.id}/clips/${me.sel}`, { start: s, end: e }); meErr(); await meRefresh(); }
+  catch (ex) { meErr(ex.message); }
+};
+$("#me-sel-del").onclick = async () => {
+  const c = currentJob.clips.find((x) => x.n === me.sel);
+  if (!c || !confirm(`Remover o lance "${c.title}" do resumo?`)) return;
+  try { await api(`/api/jobs/${currentJob.id}/clips/${me.sel}`, { method: "DELETE" }); meErr(); selectLance(null); await meRefresh(); }
+  catch (ex) { meErr(ex.message); }
+};
+$("#me-new-add").onclick = async () => {
+  const s = +$("#me-new-start").value, e = +$("#me-new-end").value;
+  if (!(e - s >= 2)) return meErr("marque o início (I) e o fim (O) do trecho, com pelo menos 2 s");
+  try {
+    const c = await postJSON(`/api/jobs/${currentJob.id}/clips`, { start: s, end: e, title: $("#me-new-title").value.trim() });
+    $("#me-new-start").value = $("#me-new-end").value = $("#me-new-title").value = "";
+    meErr(); await meRefresh(); selectLance(c.n);
+  } catch (ex) { meErr(ex.message); }
+};
+document.addEventListener("keydown", (e) => {
+  if (!$("#match-ed").open || e.target.closest?.("input, textarea")) return;
+  const k = e.key.toLowerCase();
+  if (k === "i") { $("#me-new-start").value = meAbs().toFixed(1); drawMatch(); }
+  else if (k === "o") { $("#me-new-end").value = meAbs().toFixed(1); drawMatch(); }
+  else if (e.key === " ") { e.preventDefault(); $("#me-play").click(); }
+  else if (e.key === "ArrowLeft") meSeek(meAbs() - (e.shiftKey ? 1 : 5));
+  else if (e.key === "ArrowRight") meSeek(meAbs() + (e.shiftKey ? 1 : 5));
+});
+const closeMatchEditor = () => { meVideo.pause(); $("#match-ed").close(); };
+$("#me-close").onclick = closeMatchEditor;
+$("#me-done").onclick = closeMatchEditor;
+$("#me-compile").onclick = async () => {
+  try { await postJSON(`/api/jobs/${currentJob.id}/compile`, {}); closeMatchEditor(); openJob(currentJob.id); }
+  catch (ex) { meErr(ex.message); }
+};
+$("#hl-edit-btn").onclick = openMatchEditor;
+
+$("#hl-ask-btn").onclick = async () => {
+  const instrucao = $("#hl-ask-text").value.trim();
+  if (!instrucao) return $("#hl-ask-text").focus();
+  try {
+    await postJSON(`/api/jobs/${currentJob.id}/resumo/pedido`, { instrucao });
+    $("#hl-ask-text").value = "";
+    openJob(currentJob.id);
+  } catch (ex) { alert(ex.message); }
+};
+$("#hl-ask-text").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#hl-ask-btn").click(); });
+
 $("#hl-compile").onclick = async () => {
   try {
     await postJSON(`/api/jobs/${currentJob.id}/compile`, {});
@@ -585,6 +856,13 @@ function fillClip(el, c) {
   $(".edit", el).disabled = !(done || c.status === "error");
   $(".posedit", el).disabled = !done;
   $(".clip-error", el).textContent = c.error || "";
+  const isLance = currentJob?.options?.mode === "highlights";
+  $(".lance-row", el).classList.toggle("hidden", !isLance);
+  if (isLance) $(".lance-short", el).checked = !!c.no_short;
+  const redo = $(".clip-redo", el);
+  redo.classList.toggle("hidden", !c.redo);
+  if (c.redo) redo.textContent = `Pedido: “${c.redo.instrucao}” — ${c.redo.resposta || ""}`;
+  $(".redo", el).disabled = !(done || c.status === "error");
   el._clip = c;
 }
 
@@ -659,6 +937,20 @@ document.addEventListener("keydown", (e) => {
 
 function bindClip(el, jobId, n) {
   $(".approve", el).onclick = () => sendFeedback(el, jobId, n, "ok");
+  $(".lance-short", el).onchange = async (e) => {
+    try {
+      await postJSON(`/api/jobs/${jobId}/clips/${n}/lance`, { no_short: e.target.checked });
+      el._clip.no_short = e.target.checked;
+    } catch (ex) { alert(ex.message); e.target.checked = !e.target.checked; }
+  };
+  $(".redo", el).onclick = async () => {
+    const instrucao = prompt("O que mudar neste corte?\nEx.: começa 3 s antes · termina na risada · abre direto no gol · tira o começo parado");
+    if (!instrucao || !instrucao.trim()) return;
+    try {
+      await postJSON(`/api/jobs/${jobId}/clips/${n}/redo`, { instrucao });
+      openJob(jobId);
+    } catch (ex) { alert(ex.message); }
+  };
   $$(".reject-menu .menu-list button", el).forEach((b) => {
     b.onclick = () => sendFeedback(el, jobId, n, "rejeitado", b.dataset.motivo);
   });

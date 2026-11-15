@@ -237,6 +237,24 @@ def review_prompt(candidates: list[Clip], transcript: dict, events: list[dict], 
     return "\n".join(parts)
 
 
+# ------------------------------------------------------------------ refazer um corte com instrução
+
+REDO_SYSTEM = """Você é o editor ajustando UM corte de live a pedido do streamer. Você recebe a instrução dele, \
+os limites atuais do corte, a fala e os eventos em volta (gols lidos no placar, reações) e uma folha de quadros \
+com o segundo do vídeo escrito em cada quadro. Devolva os novos limites em segundos do vídeo original, seguindo a \
+instrução ao pé da letra e mantendo as regras de bom corte (sem cortar palavra, contexto antes do lance, fim logo \
+depois da reação). `peak` = segundo do acontecimento principal. Mude o título só se a instrução pedir ou se o \
+corte mudar de assunto; senão repita o atual. `resposta` = uma frase dizendo o que você mudou."""
+
+REDO_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["start", "end", "peak", "title", "resposta"],
+    "properties": {
+        "start": {"type": "number"}, "end": {"type": "number"}, "peak": {"type": "number"},
+        "title": {"type": "string"}, "resposta": {"type": "string"},
+    },
+}
+
+
 # ------------------------------------------------------------------ teste do estranho
 
 STRANGER_SYSTEM = """Você nunca viu esta live nem conhece o streamer. Para cada clipe você recebe só uma folha de \
@@ -311,15 +329,47 @@ def resolve_backend(requested: str) -> str:
     return "manual"
 
 
-def ask(backend: str, system: str, prompt: str, schema: dict, images: list[Path] | None = None) -> dict:
+USAGE_FILE = None  # definido por quem usa (jobs.py): planilha de consumo por chamada
+
+
+def _log_usage(step: str, backend: str, model: str, effort: str, images: int, usage: dict, cost: float | None,
+               turns: int | None, seconds: float) -> None:
+    """Uma linha por chamada ao Claude: base para otimizar tokens com números, não com palpite."""
+    if USAGE_FILE is None:
+        return
+    import csv
+    import time as _time
+
+    try:
+        USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        new = not USAGE_FILE.exists()
+        with open(USAGE_FILE, "a", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f, delimiter=";")
+            if new:
+                w.writerow(["quando", "etapa", "backend", "modelo", "esforco", "imagens", "rodadas", "entrada",
+                            "cache_criado", "cache_lido", "saida", "custo_usd", "segundos"])
+            w.writerow([_time.strftime("%Y-%m-%d %H:%M:%S"), step, backend, model, effort, images, turns or "",
+                        usage.get("input_tokens", 0), usage.get("cache_creation_input_tokens", 0),
+                        usage.get("cache_read_input_tokens", 0), usage.get("output_tokens", 0),
+                        round(cost, 5) if cost is not None else "", round(seconds, 1)])
+    except OSError:
+        pass  # registro é diagnóstico: nunca derruba um corte
+
+
+def ask(backend: str, system: str, prompt: str, schema: dict, images: list[Path] | None = None,
+        step: str = "", model: str | None = None, effort: str | None = None) -> dict:
+    """Uma chamada estruturada ao Claude. `step` nomeia a etapa no registro de consumo; `model`/`effort`
+    permitem usar um modelo/esforço menor em tarefas mecânicas (ler placar, calibrar)."""
+    model, effort = model or MODEL, effort or EFFORT
     if backend == "cli":
-        return _ask_cli(system, prompt, schema, images or [])
+        return _ask_cli(system, prompt, schema, images or [], step, model, effort)
     if backend == "api":
-        return _ask_api(system, prompt, schema, images or [])
+        return _ask_api(system, prompt, schema, images or [], step, model, effort)
     raise ValueError(f"backend sem chamada automática: {backend}")
 
 
-def _ask_cli(system: str, prompt: str, schema: dict, images: list[Path]) -> dict:
+def _ask_cli(system: str, prompt: str, schema: dict, images: list[Path], step: str = "",
+             model: str = MODEL, effort: str = EFFORT) -> dict:
     path = find_cli()
     if not path:
         raise RuntimeError("Claude Code CLI não encontrado. Instale com `npm i -g @anthropic-ai/claude-code` "
@@ -328,6 +378,10 @@ def _ask_cli(system: str, prompt: str, schema: dict, images: list[Path]) -> dict
     with tempfile.TemporaryDirectory(prefix="cortai-") as tmp:
         system_file = Path(tmp) / "system.txt"
         system_file.write_text(system, encoding="utf-8")
+        # sem os servidores MCP do usuário: eles somavam ~123 mil tokens de definição de ferramentas em TODA
+        # chamada (medido: 126.840 → 3.947 tokens numa chamada mínima)
+        mcp_file = Path(tmp) / "mcp.json"
+        mcp_file.write_text('{"mcpServers": {}}', encoding="utf-8")
         for img in images:
             shutil.copy(img, Path(tmp) / img.name)
         if images:
@@ -339,17 +393,22 @@ def _ask_cli(system: str, prompt: str, schema: dict, images: list[Path]) -> dict
             "--output-format", "json",
             "--json-schema", json.dumps(schema),
             "--system-prompt-file", str(system_file),
-            "--model", MODEL,
-            "--effort", EFFORT,
+            "--model", model,
+            "--effort", effort,
             "--no-session-persistence",
+            "--strict-mcp-config", "--mcp-config", str(mcp_file),
         ]
         cmd += ["--tools", "Read", "--allowedTools", "Read"] if images else ["--tools", ""]
+        import time as _time
+        t0 = _time.time()
         proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
                               cwd=tmp, timeout=1800)
     try:
         result = json.loads(proc.stdout)
     except json.JSONDecodeError:
         raise RuntimeError(f"resposta inesperada do Claude Code: {(proc.stderr or proc.stdout)[-800:]}")
+    _log_usage(step, "cli", model, effort, len(images), result.get("usage") or {}, result.get("total_cost_usd"),
+               result.get("num_turns"), _time.time() - t0)
     if result.get("is_error"):
         raise RuntimeError(f"Claude Code: {result.get('result')}")
     if isinstance(result.get("structured_output"), dict):
@@ -357,7 +416,8 @@ def _ask_cli(system: str, prompt: str, schema: dict, images: list[Path]) -> dict
     return extract_json(result.get("result", ""))
 
 
-def _ask_api(system: str, prompt: str, schema: dict, images: list[Path]) -> dict:
+def _ask_api(system: str, prompt: str, schema: dict, images: list[Path], step: str = "",
+             model: str = MODEL, effort: str = EFFORT) -> dict:
     import anthropic
 
     content: list[dict] = []
@@ -367,18 +427,25 @@ def _ask_api(system: str, prompt: str, schema: dict, images: list[Path]) -> dict
             "type": "base64", "media_type": "image/jpeg",
             "data": base64.b64encode(img.read_bytes()).decode()}})
     content.append({"type": "text", "text": prompt})
+    import time as _time
+    t0 = _time.time()
     client = anthropic.Anthropic()
     # Fallback do lado do servidor: se o modelo recusar, a própria API reroteia para outro modelo.
     with client.beta.messages.stream(
-        model=MODEL,
+        model=model,
         max_tokens=32000,
         betas=["server-side-fallback-2026-07-01"],
         extra_body={"fallbacks": "default"},
         system=system,
-        output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": schema}},
+        output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
         messages=[{"role": "user", "content": content}],
     ) as stream:
         message = stream.get_final_message()
+    u = message.usage
+    _log_usage(step, "api", model, effort, len(images),
+               {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens,
+                "cache_creation_input_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0,
+                "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0}, None, 1, _time.time() - t0)
     if message.stop_reason == "refusal":
         raise RuntimeError("o Claude recusou analisar este conteúdo")
     if message.stop_reason == "max_tokens":

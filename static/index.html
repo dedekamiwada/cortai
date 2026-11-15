@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortaí</title>
-<link rel="stylesheet" href="style.css?v=20261114i">
+<link rel="stylesheet" href="style.css?v=20261115b">
 </head>
 <body>
 <header class="top">
@@ -132,6 +132,11 @@
           <label class="field check"><input name="cover_in_video" type="checkbox"><span>Gravar a capa no fim do vídeo também</span></label>
         </div>
       </details>
+      <div class="grid hl-only hidden serie-row">
+        <label class="field serie-name"><span>Bordão da série <em>(opcional; {n} vira o número)</em></span>
+          <input name="serie" type="text" maxlength="120" placeholder="Dia {n} tentando pegar champion até eu perder"></label>
+        <label class="field"><span>Episódio</span><input name="serie_n" type="number" min="1" max="9999"></label>
+      </div>
       <p class="hint hl-only hidden">Conta a <b>partida inteira em ordem</b> — kickoff, todos os gols, viradas, prorrogação e resultado, sem tempo morto — num <b>short vertical</b> e numa <b>versão horizontal</b>, com o <b>roteiro de narração</b> (.txt e .srt) para você gravar por cima no CapCut. Quantidade e duração dos clipes são decididas pela partida.</p>
       <button class="primary btn-lg" type="submit" id="submit">Gerar cortes</button>
       <p class="form-error" id="form-error"></p>
@@ -176,6 +181,8 @@
         <select id="match-basis"><option value="fala_imagem">fala + imagem</option><option value="imagem">só imagem</option></select>
       </label>
     </div>
+    <label class="field wide serie-name"><span>Bordão da série <em>(opcional; {n} vira o número do episódio, que sobe sozinho)</em></span>
+      <input id="match-serie" type="text" maxlength="120" placeholder="Dia {n} tentando pegar champion até eu perder"></label>
     <p class="muted small">O Claude separou a live pelo HUD do jogo (início, placar e tela de resultado). Marque as partidas que você quer em vídeo: cada uma vira um resumo narrado (short vertical + horizontal + roteiro).</p>
     <table class="beats matches"><tbody id="match-rows"></tbody></table>
     <div class="pos-actions">
@@ -205,10 +212,21 @@
         <h4>Roteiro de narração</h4>
         <select id="hl-script-pick"><option value="vertical">Short vertical</option><option value="horizontal">Horizontal</option></select>
         <button class="ghost" id="hl-copy">Copiar</button>
+        <button class="secondary" id="hl-save-script" title="Salva as falas e refaz o .srt (o vídeo não muda)"><i class="ic ic-check"></i>Salvar roteiro</button>
         <button class="secondary" id="hl-compile" title="Depois de editar um lance, monte os dois vídeos de novo"><i class="ic ic-refresh"></i>Remontar vídeos</button>
       </div>
       <p class="muted small">Os tempos são do vídeo final. Importe o .srt no CapCut como legenda para ver onde cada fala entra enquanto grava.</p>
-      <pre id="hl-script"></pre>
+      <textarea id="hl-script" spellcheck="true" rows="16"></textarea>
+      <p class="muted small">Edite as falas à vontade. Mantenha o tempo de cada linha no formato <code>[  12.3s] fala</code>: é dele que sai o .srt.</p>
+    </div>
+    <div class="hl-ask">
+      <h4>Pedir mudança ao Claude</h4>
+      <div class="pos-actions">
+        <input id="hl-ask-text" type="text" maxlength="400" placeholder="Ex.: tira o kickoff, põe o lance da trave no short e deixa o short mais curto">
+        <button class="primary" id="hl-ask-btn"><i class="ic ic-wand"></i>Aplicar</button>
+        <button class="secondary" id="hl-edit-btn" title="Veja a partida e escolha você mesmo os trechos"><i class="ic ic-film"></i>Editar a partida</button>
+      </div>
+      <p class="muted small" id="hl-ask-reply"></p>
     </div>
     <h4>Lances <span class="muted small">— cada um abaixo pode ser editado; depois clique em "Remontar vídeos"</span></h4>
   </section>
@@ -277,6 +295,26 @@
     <p class="form-error" id="apply-error"></p>
   </section>
 
+  <section id="alts" class="card hidden">
+    <div class="hl-script-head">
+      <h2>Outros momentos que o Claude considerou</h2>
+      <span class="muted small" id="alts-count"></span>
+    </div>
+    <p class="muted small">Ele analisa o dobro de momentos do que entrega. Se algum destes for melhor, use: vira corte na hora (no resumo da partida, vira lance — depois clique em "Remontar vídeos").</p>
+    <div class="alt-list" id="alt-list"></div>
+  </section>
+
+  <section id="timeline" class="card tl-card hidden">
+    <div class="hl-script-head">
+      <h2>Linha do tempo da live</h2>
+      <span class="tl-legend"><i class="lg-nosso"></i>seu gol <i class="lg-deles"></i>gol sofrido <i class="lg-reacao"></i>reação forte <i class="lg-corte"></i>corte</span>
+    </div>
+    <p class="muted small">Gols lidos no placar do jogo e reações acima do seu volume normal. Clique num marcador para criar um corte ali.</p>
+    <div class="tl-scroll" id="tl-scroll"><div class="tl-track" id="tl-track"></div></div>
+    <div class="tl-pop hidden" id="tl-pop"><b id="tl-pop-title"></b><span class="muted small" id="tl-pop-sub"></span>
+      <button class="primary small" id="tl-pop-create"><i class="ic ic-plus"></i>Criar corte aqui</button></div>
+  </section>
+
   <p class="review-help" id="review-help"><span>Revisão rápida:</span><span><kbd>J</kbd>/<kbd>K</kbd> anda entre os cortes</span><span><kbd>A</kbd> aprova</span><span><kbd>R</kbd> rejeita (<kbd>1</kbd>–<kbd>5</kbd> motivo)</span><span><kbd>Espaço</kbd> toca</span><span><kbd>E</kbd> edita</span></p>
   <div id="clips" class="clips"></div>
 </main>
@@ -322,6 +360,7 @@
         <details class="menu">
           <summary class="ghost icon-btn" title="Mais ações" aria-label="Mais ações"><i class="ic ic-more"></i></summary>
           <div class="menu-list">
+            <button class="redo" title="O Claude reposiciona este corte seguindo o seu pedido"><i class="ic ic-wand"></i><span>Refazer com instrução…</span></button>
             <button class="posedit" title="Zooms, efeitos sonoros, trilha e voz destacada neste clipe pronto"><i class="ic ic-sparkles"></i><span>Pós-edição</span></button>
             <button class="studio" title="Abrir este trecho no editor completo"><i class="ic ic-film"></i><span>Abrir no Estúdio</span></button>
             <button class="copy"><i class="ic ic-copy"></i><span>Copiar post</span></button>
@@ -332,6 +371,8 @@
           </div>
         </details>
       </div>
+      <label class="check lance-row hidden"><input type="checkbox" class="lance-short"> Entra no short vertical <em class="muted small">(o horizontal usa todos)</em></label>
+      <p class="clip-redo muted small hidden"></p>
       <p class="clip-error form-error"></p>
     </div>
   </article>
@@ -439,6 +480,67 @@
   </div>
 </dialog>
 
+<dialog id="match-ed">
+  <div class="ed-head">
+    <b class="cv-head-title"><i class="ic ic-film"></i>Editar a partida</b>
+    <span class="muted small">Assista e escolha os trechos. <kbd>I</kbd> marca o início, <kbd>O</kbd> o fim, <kbd>Espaço</kbd> toca.</span>
+    <span style="flex:1"></span>
+    <button class="ghost icon-btn" id="me-close" aria-label="Fechar" title="Fechar"><i class="ic ic-x"></i></button>
+  </div>
+  <div id="me-loading" class="ed-loading">Preparando a prévia da partida…</div>
+  <div id="me-body" class="me-body hidden">
+    <div class="me-player">
+      <video id="me-video" playsinline preload="auto"></video>
+      <div class="ed-transport">
+        <button class="ghost small" id="me-back" title="Volta 5 s">−5 s</button>
+        <button class="secondary small" id="me-play">Tocar</button>
+        <button class="ghost small" id="me-fwd" title="Avança 5 s">+5 s</button>
+        <span class="ed-time" id="me-time"></span>
+      </div>
+    </div>
+    <div class="me-side">
+      <div class="ed-section" id="me-sel">
+        <h4>Lance selecionado</h4>
+        <p class="muted small" id="me-sel-empty">Clique num trecho verde/cinza da linha do tempo.</p>
+        <div id="me-sel-body" class="hidden">
+          <b id="me-sel-title"></b>
+          <div class="ed-row">
+            <label class="ed-range">Início <input id="me-sel-start" type="number" step="0.1"></label>
+            <button class="ghost small" id="me-sel-in" title="Usar o tempo atual do vídeo">⇤ agora</button>
+          </div>
+          <div class="ed-row">
+            <label class="ed-range">Fim <input id="me-sel-end" type="number" step="0.1"></label>
+            <button class="ghost small" id="me-sel-out" title="Usar o tempo atual do vídeo">agora ⇥</button>
+          </div>
+          <label class="check"><input type="checkbox" id="me-sel-short"> Entra no short vertical</label>
+          <div class="ed-row">
+            <button class="ghost small" id="me-sel-play"><i class="ic ic-play"></i>Tocar o lance</button>
+            <button class="secondary small" id="me-sel-save"><i class="ic ic-check"></i>Salvar trecho</button>
+            <button class="ghost danger small" id="me-sel-del"><i class="ic ic-trash"></i>Remover</button>
+          </div>
+        </div>
+      </div>
+      <div class="ed-section">
+        <h4>Adicionar trecho</h4>
+        <div class="ed-row">
+          <label class="ed-range">Início <input id="me-new-start" type="number" step="0.1"></label>
+          <label class="ed-range">Fim <input id="me-new-end" type="number" step="0.1"></label>
+        </div>
+        <input id="me-new-title" type="text" maxlength="60" placeholder="Nome do lance (ex.: SÓ TRAVE)">
+        <button class="secondary small" id="me-new-add"><i class="ic ic-plus"></i>Adicionar à partida</button>
+      </div>
+      <p class="form-error" id="me-error"></p>
+    </div>
+    <div class="me-tl" id="me-tl"><div class="me-head" id="me-head"></div></div>
+    <div class="me-legend muted small"><span><i class="me-lg short"></i>no short</span><span><i class="me-lg only-h"></i>só no horizontal</span><span><i class="me-lg goal"></i>gol</span><span><i class="me-lg mark"></i>trecho novo marcado</span></div>
+  </div>
+  <div class="ed-foot">
+    <p class="muted small" style="flex:1;margin:0">As mudanças nos lances renderizam na hora; depois clique em "Remontar vídeos".</p>
+    <button class="ghost" id="me-done">Fechar</button>
+    <button class="primary" id="me-compile"><i class="ic ic-refresh"></i>Remontar vídeos</button>
+  </div>
+</dialog>
+
 <dialog id="cover-dlg">
   <div class="ed-head">
     <b class="cv-head-title"><i class="ic ic-image"></i>Capa do clipe</b>
@@ -503,6 +605,6 @@
   </div>
 </dialog>
 
-<script src="app.js?v=20261114i"></script>
+<script src="app.js?v=20261115b"></script>
 </body>
 </html>

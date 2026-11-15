@@ -73,8 +73,9 @@ def scan_prompt(sheets: list[tuple[Path, float, float]], events: list[dict], cou
         parts.append(f"Pedido do streamer (prioridade máxima): {extra}")
     parts.append("Folhas:")
     parts += [f"- {p.name}: de {a:.0f}s a {b:.0f}s" for p, a, b in sheets]
-    peaks = [signals.describe(e) for e in events if e["kind"] in signals.LOUD_KINDS]
-    parts += ["", "Picos do som:", "\n".join(peaks[:200]) or "(nenhum)"]
+    peaks = [signals.describe(e) for e in events
+             if e["kind"] in (*signals.LOUD_KINDS, "gol_nosso", "gol_deles", "inicio", "fim_do_tempo", "reacao")]
+    parts += ["", "Eventos (gols lidos no placar, reações e picos do som):", "\n".join(peaks[:250]) or "(nenhum)"]
     parts.append('\nResponda somente com JSON {"clips": [{"title", "start", "end", "peak", "hook", "reason", "score", "hashtags"}]}.')
     return "\n".join(parts)
 
@@ -190,13 +191,14 @@ Além disso: `titulo` (título do post, curto e específico), `gancho` = a prime
 
 KINDS = {"abertura": "Abertura", "gol_nosso": "Gol nosso", "gol_deles": "Gol deles", "jogada": "Jogada",
          "engracado": "Engraçado", "prorrogacao": "Prorrogação", "resultado": "Resultado"}
-STORY = {"abertura", "gol_nosso", "gol_deles", "prorrogacao", "resultado"}  # não saem do short
+STORY = {"abertura", "gol_nosso", "gol_deles", "resultado"}  # não saem do short (prorrogação disputa vaga pela nota)
 
 REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["titulo", "gancho", "post", "lances"],
+    "required": ["titulo", "gancho", "post", "adversario", "lances"],
     "properties": {
         "titulo": {"type": "string"},
+        "adversario": {"type": "string", "description": "Nome do adversário como aparece no HUD/placar, ou \"\""},
         "gancho": {"type": "string"},
         "post": {"type": "string"},
         "lances": {"type": "array", "items": {
@@ -225,10 +227,14 @@ REVIEW_SCHEMA = {
 }
 
 
-def review_prompt(candidates, windows, images, transcript_text_for, extra: str) -> str:
+def review_prompt(candidates, windows, images, transcript_text_for, extra: str, serie: str = "") -> str:
     parts = []
     if extra:
         parts.append(f"Pedido do streamer (prioridade máxima): {extra}\n")
+    if serie:
+        parts.append(f"Bordão desta série (abra o `gancho` com ele, palavra por palavra): \"{serie}\". "
+                     "Leia o nome do adversário no HUD/placar e apresente-o logo depois do bordão; ele também vai num card "
+                     "\"VS NOME\" na abertura. Feche com o placar final e um \"Quem é o próximo?\".\n")
     for i, (c, (ws, we), img) in enumerate(zip(candidates, windows, images), 1):
         parts.append(f"## Candidato {i} — imagem {img} (quadros de {ws:.1f}s a {we:.1f}s)")
         parts.append(f"Proposta: \"{c.title}\" de {c.start:.2f}s a {c.end:.2f}s, pico em {c.peak or c.start:.2f}s. {c.reason}")
@@ -279,8 +285,9 @@ def normalize(raw: dict, candidates, duration: float) -> dict:
         short.remove(min(extras, key=lambda x: x["score"]))
     for x in lances:
         x["no_short"] = x in short
+    adv = " ".join((raw.get("adversario") or "").split())[:24]
     return {"titulo": (raw.get("titulo") or "").strip(), "gancho": (raw.get("gancho") or "").strip(),
-            "post": (raw.get("post") or "").strip(), "lances": lances}
+            "post": (raw.get("post") or "").strip(), "adversario": adv.upper(), "lances": lances}
 
 
 # ------------------------------------------------------------------ montagem
@@ -295,7 +302,7 @@ def _labels_ass(width: int, height: int, items: list[tuple[float, str]], title: 
     size = 64 if vertical else 54
     # vertical: a câmera e as faixas da cena ficam no terço de cima; rótulo e título vão para a área do jogo
     y = int(height * (0.53 if vertical else 0.12))
-    title_y = int(height * (0.66 if vertical else 0.5))
+    title_y = int(height * (0.55 if vertical else 0.5))  # abaixo da faixa da cena e acima da legenda da fala (~0.70)
     head = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -416,6 +423,24 @@ def _srt_time(t: float) -> str:
     return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
 
 
+def srt_from_script(text: str, total: float) -> str:
+    """O .srt a partir do roteiro (editado ou não): cada linha "[  12.3s] fala" vira uma legenda até a próxima."""
+    import re
+
+    lines = []
+    for raw in text.splitlines():
+        m = re.match(r"\s*\[\s*(\d+(?:[.,]\d+)?)s\]\s*(.+?)\s*(?:⚠.*)?$", raw)
+        if m:
+            lines.append((float(m.group(1).replace(",", ".")), m.group(2).strip()))
+    lines.sort(key=lambda x: x[0])
+    out = []
+    for i, (t, txt) in enumerate(lines):
+        nxt = lines[i + 1][0] if i + 1 < len(lines) else max(total, t + 1.5)
+        e = min(nxt, t + max(1.2, len(txt.split()) / WORDS_PER_SECOND))
+        out.append(f"{len(out) + 1}\n{_srt_time(t)} --> {_srt_time(e)}\n{txt}\n")
+    return "\n".join(out)
+
+
 def script(lances: list[dict], starts: list[float], durations: list[float], total: float, gancho: str,
            titulo: str, version: str) -> tuple[str, str]:
     """Roteiro (.txt legível) e .srt com as falas no tempo do vídeo final, para gravar no CapCut."""
@@ -446,18 +471,69 @@ def script(lances: list[dict], starts: list[float], durations: list[float], tota
             "a cada gol e deixe a sua reação/o som do gol respirar. No CapCut: grave a narração, abaixe o áudio do",
             "jogo para ~30% e gere a legenda automática (1–3 palavras, destaque em amarelo).", ""]
     body = []
-    current = -1
-    for t, e, text, k, tight in timed:
-        if k != current:
-            current = k
-            if k:
-                lance = lances[k - 1]
-                # lances do job guardam o rótulo em `title` (é o título do clipe no editor)
-                body.append(f"\n#{k} {lance.get('title', '')}  ({starts[k - 1]:.1f}s → {starts[k - 1] + durations[k - 1]:.1f}s)")
-                body.append(f"   na tela: {lance.get('visual', '')}")
-            else:
+    by_lance: dict[int, list] = {}
+    for item in timed:
+        by_lance.setdefault(item[3], []).append(item)
+    # todos os lances aparecem, com ou sem fala sugerida (um lance adicionado à mão não tem fala ainda)
+    for k in range(0, len(lances) + 1):
+        if k == 0:
+            if by_lance.get(0):
                 body.append("\nGANCHO")
-        body.append(f"   [{t:5.1f}s] {text}" + ("   ⚠ fala longa para o espaço: fale rápido ou corte" if tight else ""))
+        else:
+            lance = lances[k - 1]
+            # lances do job guardam o rótulo em `title` (é o título do clipe no editor)
+            body.append(f"\n#{k} {lance.get('title', '')}  ({starts[k - 1]:.1f}s → {starts[k - 1] + durations[k - 1]:.1f}s)")
+            if lance.get("visual"):
+                body.append(f"   na tela: {lance['visual']}")
+            if not by_lance.get(k):
+                body.append("   (sem fala sugerida: narre o lance ou deixe o som do jogo respirar)")
+        for t, e, text, _, tight in by_lance.get(k, []):
+            body.append(f"   [{t:5.1f}s] {text}" + ("   ⚠ fala longa para o espaço: fale rápido ou corte" if tight else ""))
     txt = "\n".join(x for x in head if x is not None) + "\n".join(body) + "\n"
     srt = "\n".join(f"{i}\n{_srt_time(t)} --> {_srt_time(e)}\n{text}\n" for i, (t, e, text, _, _) in enumerate(timed, 1))
     return txt, srt
+
+
+# ------------------------------------------------------------------ pedido do streamer para mudar o resumo
+
+EDIT_SYSTEM = """Você edita um RESUMO NARRADO de partida que já está montado. O streamer pede uma mudança em \
+texto livre. Você recebe os lances atuais (número, trecho no vídeo original, tipo, se entra no short vertical, o \
+que acontece), os eventos lidos no placar da partida e momentos que ficaram de fora. Devolva só as operações \
+necessárias para atender o pedido:
+- remover: tira o lance `n` do resumo;
+- short_sim / short_nao: o lance `n` entra ou sai do short vertical (o horizontal usa todos);
+- ajustar: novos `start`/`end` (segundos do vídeo original) para o lance `n`;
+- adicionar: lance novo de `start` a `end` com `titulo` curto (use os eventos e momentos de fora; o trecho tem de \
+estar dentro da partida e não pode repetir um lance existente).
+Lembre que o resumo conta a partida inteira: avise em `resposta` se o pedido tirar um gol. O short deve ficar \
+entre ~60 e 110 s. `resposta` = uma ou duas frases dizendo o que mudou."""
+
+EDIT_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["operacoes", "resposta"],
+    "properties": {
+        "resposta": {"type": "string"},
+        "operacoes": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["acao", "n", "start", "end", "titulo"],
+            "properties": {
+                "acao": {"type": "string", "enum": ["remover", "short_sim", "short_nao", "ajustar", "adicionar"]},
+                "n": {"type": ["integer", "null"]},
+                "start": {"type": ["number", "null"]}, "end": {"type": ["number", "null"]},
+                "titulo": {"type": "string"},
+            },
+        }},
+    },
+}
+
+
+def edit_prompt(instruction: str, lances: list[dict], events: list[dict], alts: list[dict], start: float, end: float) -> str:
+    rows = [f"#{c['n']} {c['start']:.1f}–{c['end']:.1f}s ({c['end'] - c['start']:.0f}s) [{c.get('tipo', '')}]"
+            f"{' SHORT' if c.get('no_short') else ''} \"{c['title']}\": {c.get('visual', '')[:140]}" for c in lances]
+    short = sum(c["end"] - c["start"] for c in lances if c.get("no_short"))
+    evs = [f"[{e['t']:.0f}s] {e['tipo']} {e.get('placar', '')}" for e in events if start <= e["t"] <= end]
+    alt = [f"{a['start']:.0f}–{a['end']:.0f}s \"{a['title']}\": {(a.get('visual') or a.get('reason') or '')[:120]}"
+           for a in alts[:12]]
+    return "\n".join([f"Pedido do streamer: {instruction}", "",
+                      f"Partida de {start:.0f}s a {end:.0f}s. Short atual: {short:.0f}s.", "", "Lances:", *rows,
+                      "", "Eventos do placar:", *(evs or ["(nenhum)"]), "", "Momentos que ficaram de fora:",
+                      *(alt or ["(nenhum)"])])

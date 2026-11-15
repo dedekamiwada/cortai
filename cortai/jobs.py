@@ -13,9 +13,10 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import capa, captions, edit, frames, hud, media, paths, picker, render, signals, styles, titles, to_studio, transcribe
+from . import capa, captions, edit, frames, hud, media, paths, picker, reframe, render, signals, styles, titles, to_studio, transcribe
 
 JOBS_DIR = paths.JOBS_DIR
+picker.USAGE_FILE = JOBS_DIR / "_uso" / "uso.csv"  # consumo de tokens por chamada (otimização com números)
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_OPTS = {
@@ -55,6 +56,8 @@ DEFAULT_OPTS = {
     "cover_style": capa.DEFAULT_STYLE,
     "cover_handle": "",                # ex.: @_saitox_, escrito embaixo do título da capa
     "cover_in_video": False,           # também gravar a capa no fim do vídeo
+    "serie": "",       # bordão da série do resumo narrado, com {n} = número do episódio
+    "serie_n": 1,      # próximo episódio (sobe sozinho a cada resumo pronto)
 }
 
 # o que o editor / "aplicar a todos" pode mudar em um clipe (sobrepõe as opções do job)
@@ -182,11 +185,15 @@ def create(name: str, opts: dict, url: str | None = None, local_path: str | None
         shutil.rmtree(d, ignore_errors=True)
         raise ValueError("envie um arquivo, um caminho local ou uma URL")
 
+    opts = {**defaults(), **opts}
+    if opts.get("mode") == "highlights" and (opts.get("serie") or "").strip():
+        opts["serie"] = opts["serie"].strip()
+        opts["serie_n"] = _reserve_episode(opts["serie"], opts.get("serie_n"))
     job = {
         "id": job_id, "name": name or source.get("url") or Path(source["path"]).name,
         "created": time.time(), "updated": time.time(),
         "status": "queued", "progress": 0.0, "message": "Na fila",
-        "options": {**defaults(), **opts}, "backend": None,
+        "options": opts, "backend": None,
         "source": source, "clips": [], "error": None,
     }
     for name_, path_ in (seed_files or {}).items():  # transcrição/volume já calculados da mesma fonte
@@ -337,7 +344,7 @@ def _run_pipeline(job_id: str) -> None:
     who = "Claude Code" if backend == "cli" else "API"
     update(job_id, status="selecting", progress=0.0,
            message=f"Claude ({who}) lendo a transcrição e os picos de áudio…")
-    raw = picker.ask(backend, system, prompt, picker.CANDIDATES_SCHEMA)
+    raw = picker.ask(backend, system, prompt, picker.CANDIDATES_SCHEMA, step="cortes_candidatos")
     (d / "candidates.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     candidates = [c for c in picker.parse_plan(raw) if c.end > c.start]
     candidates.sort(key=lambda c: c.score, reverse=True)
@@ -382,7 +389,7 @@ def _map_matches(job_id: str, then_status: str = "done") -> None:
                                     highlights.MAP_MAX_FRAMES, highlights.MAP_MIN_STEP)
     update(job_id, message=f"Claude separando as partidas ({len(sheets)} folhas de frames)…")
     raw = picker.ask(backend, highlights.MAP_SYSTEM, highlights.map_prompt(sheets, src["duration"]),
-                     highlights.MAP_SCHEMA, [s[0] for s in sheets])
+                     highlights.MAP_SCHEMA, [s[0] for s in sheets], step="partidas_mapa")
     (_dir(job_id) / "partidas.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     partidas = highlights.normalize_matches(raw, src["duration"])
     if not partidas:
@@ -392,7 +399,7 @@ def _map_matches(job_id: str, then_status: str = "done") -> None:
                    (" — escolha de qual fazer os melhores momentos" if then_status == "waiting_match" else ""))
 
 
-def create_match_job(job_id: str, n: int, basis: str) -> dict:
+def create_match_job(job_id: str, n: int, basis: str, serie: str | None = None) -> dict:
     """Novo projeto de melhores momentos só com o trecho de uma partida (reaproveita transcrição e volume)."""
     job = get(job_id)
     m = next((p for p in (job or {}).get("partidas") or [] if p["n"] == n), None)
@@ -405,8 +412,11 @@ def create_match_job(job_id: str, n: int, basis: str) -> dict:
         tfile = d / "transcript.json"
         if tfile.exists() and json.loads(tfile.read_text(encoding="utf-8")).get("segments"):
             seed["transcript.json"] = tfile
+    if (d / "hud_events.json").exists():
+        seed["hud_events.json"] = d / "hud_events.json"  # o placar da live inteira já foi lido
     opts = {**job["options"], "mode": "highlights", "range_start": m["inicio"], "range_end": m["fim"],
-            "highlight_basis": basis if basis in ("fala_imagem", "imagem") else "fala_imagem"}
+            "highlight_basis": basis if basis in ("fala_imagem", "imagem") else "fala_imagem",
+            "serie": defaults().get("serie", "") if serie is None else serie, "serie_n": None}
     base = Path(job["name"]).stem if "." in job["name"] else job["name"]
     name = f"{base} — partida {n}" + (f" ({m['placar']})" if m["placar"] else "")
     return create(name, opts, local_path=job["source"]["path"], seed_files=seed)
@@ -446,26 +456,27 @@ def _run_highlights(job_id: str) -> None:
                 audio.unlink(missing_ok=True)
             lfile.write_text(json.dumps(loud), encoding="utf-8")
         tfile.write_text(json.dumps(transcript), encoding="utf-8")
-        events = signals.audio_events(loud, [])
+        events = _timeline(job_id, backend, loud, [])
         update(job_id, status="reviewing", progress=0.0, message="Separando frames da partida inteira…")
         sheets = highlights.scan_sheets(path, src, d / "scan", start, end)
         update(job_id, status="selecting", message=f"Claude assistindo à partida ({len(sheets)} folhas de frames)…")
         raw = picker.ask(backend, highlights.SCAN_SYSTEM,
                          highlights.scan_prompt(sheets, events, HIGHLIGHT_CANDIDATES, extra),
-                         picker.CANDIDATES_SCHEMA, [s[0] for s in sheets])
+                         picker.CANDIDATES_SCHEMA, [s[0] for s in sheets], step="resumo_varredura")
     else:
         if not src["has_audio"]:
             raise RuntimeError("o vídeo não tem áudio — use a opção 'só imagem'")
         transcript, loud = _transcript_and_signals(job_id)
-        events = signals.audio_events(loud, transcribe.all_words(transcript))
+        events = _timeline(job_id, backend, loud, transcribe.all_words(transcript))
         text = picker.format_transcript(transcript, events, start, end)
         update(job_id, status="selecting", progress=0.0, message="Claude lendo a partida e os picos de áudio…")
         raw = picker.ask(backend, picker.system_prompt("game", None),
                          highlights.transcript_candidates_prompt(text, src["duration"], HIGHLIGHT_CANDIDATES, extra),
-                         picker.CANDIDATES_SCHEMA)
+                         picker.CANDIDATES_SCHEMA, step="resumo_candidatos")
     (d / "candidates.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     candidates = sorted((c for c in picker.parse_plan(raw) if c.end > c.start), key=lambda c: c.score, reverse=True)
-    candidates = sorted(candidates[:HIGHLIGHT_CANDIDATES], key=lambda c: c.start)
+    candidates = sorted(candidates[:HIGHLIGHT_CANDIDATES] + _missing_goals(events, candidates, start, end),
+                        key=lambda c: c.start)
     if not candidates:
         raise RuntimeError("o Claude não achou lances — tente outras instruções")
 
@@ -483,12 +494,15 @@ def _run_highlights(job_id: str) -> None:
     def context(a: float, b: float) -> str:
         if transcript["segments"]:
             return picker.format_transcript(transcript, events, a, b)
-        return "\n".join(signals.describe(e) for e in events if a <= e["t"] <= b and e["kind"] in signals.LOUD_KINDS)
+        return "\n".join(signals.describe(e) for e in events
+                         if a <= e["t"] <= b and (e["kind"] in signals.LOUD_KINDS or e["kind"] in GAME_KINDS))
 
     update(job_id, progress=0.0, message=f"Claude assistindo aos {len(candidates)} lances e escrevendo o roteiro…")
+    serie = (opts.get("serie") or "").strip()
+    serie_txt = serie.replace("{n}", str(int(opts.get("serie_n") or 1))) if serie else ""
     raw = picker.ask(backend, highlights.REVIEW_SYSTEM,
-                     highlights.review_prompt(candidates, windows, [p.name for p in images], context, extra),
-                     highlights.REVIEW_SCHEMA, images)
+                     highlights.review_prompt(candidates, windows, [p.name for p in images], context, extra, serie_txt),
+                     highlights.REVIEW_SCHEMA, images, step="resumo_revisao")
     (d / "highlight-review.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     plan = highlights.normalize(raw, candidates, src["duration"])
     if not plan["lances"]:
@@ -507,13 +521,141 @@ def _run_highlights(job_id: str) -> None:
             "overrides": {"title_overlay": False},
         })
     update(job_id, clips=clips, status="rendering", progress=0.0,
-           highlight={"titulo": plan["titulo"], "gancho": plan["gancho"], "post": plan["post"]})
+           highlight={"titulo": plan["titulo"], "gancho": plan["gancho"], "post": plan["post"],
+                      "adversario": plan.get("adversario", ""), "serie": serie_txt})
     words = transcribe.all_words(transcript)
     for idx in range(len(clips)):
         update(job_id, message=f"Renderizando o lance {idx + 1} de {len(clips)} (vertical)…",
                progress=idx / len(clips) * 0.5)
         _render_one(job_id, idx, words)
     _compile_highlights(job_id)
+
+
+GAME_KINDS = ("gol_nosso", "gol_deles", "inicio", "fim_do_tempo", "reacao")
+
+
+def _reserve_episode(serie: str, n: int | None) -> int:
+    """Número do episódio da série, reservado na CRIAÇÃO do projeto: várias partidas geradas de uma vez
+    ficam 12, 13, 14… O próximo projeto já vem com o número seguinte, e o bordão fica salvo como padrão."""
+    with _lock:
+        try:
+            saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            saved = {}
+        ep = int(n) if n else int(saved.get("serie_n") or 1)
+        saved["serie"] = serie
+        saved["serie_n"] = max(int(saved.get("serie_n") or 1), ep + 1)
+        SETTINGS_FILE.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+        return ep
+
+
+REDO_MARGIN = 20.0  # s de folga em volta do corte que o Claude pode usar para reposicionar
+
+
+def redo_clip(job_id: str, n: int, instruction: str) -> None:
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise ValueError("escreva o que mudar (ex.: começa 3 s antes, termina na risada)")
+    idx = _clip_index(job, n)
+    if job["clips"][idx]["status"] in ("pending", "rendering"):
+        raise ValueError("espere a renderização terminar")
+    backend = picker.resolve_backend(job.get("backend") or job["options"].get("backend", "auto"))
+    if backend == "manual":
+        raise ValueError("refazer com instrução precisa do Claude Code logado ou de ANTHROPIC_API_KEY")
+    _set_clip(job_id, idx, status="pending", error=None, redo={"instrucao": instruction, "resposta": "Refazendo…"})
+    _worker.submit(_redo_clip, job_id, idx, instruction, backend)
+
+
+def _redo_clip(job_id: str, idx: int, instruction: str, backend: str) -> None:
+    try:
+        job = get(job_id)
+        clip, src = job["clips"][idx], job["source"]
+        words = _words(job_id)
+        loud_file = _dir(job_id) / "loudness.json"
+        loud = json.loads(loud_file.read_text(encoding="utf-8")) if loud_file.exists() else []
+        events = _timeline(job_id, backend, loud, words)
+        a, b = max(0.0, clip["start"] - REDO_MARGIN), min(src["duration"], clip["end"] + REDO_MARGIN)
+        img = frames.grid(Path(src["path"]), a, b, _dir(job_id) / "review" / f"redo-{clip['n']:02d}.jpg",
+                          src["width"], src["height"], n=16, cols=4, focus=clip.get("peak"))
+        transcript = json.loads((_dir(job_id) / "transcript.json").read_text(encoding="utf-8"))
+        prompt = (f"Instrução do streamer: {instruction}\n\nCorte atual: \"{clip['title']}\" de {clip['start']:.2f}s a "
+                  f"{clip['end']:.2f}s, pico em {clip.get('peak') or clip['start']:.2f}s.\nQuadros de {a:.1f}s a {b:.1f}s "
+                  f"na imagem {img.name}.\n\n" + picker.format_transcript(transcript, events, a, b))
+        raw = picker.ask(backend, picker.REDO_SYSTEM, prompt, picker.REDO_SCHEMA, [img], step="corte_refazer")
+        new = picker.Clip(title=(raw.get("title") or clip["title"]).strip()[:200], start=float(raw["start"]),
+                          end=float(raw["end"]), peak=float(raw.get("peak") or raw["start"]), score=clip.get("score", 50))
+        # o pedido manda nas bordas: só encaixa nas palavras (sem as regras automáticas de contexto/replay)
+        snapped = picker.snap_clips([new], words, src["duration"], 1, 600)
+        if not snapped:
+            raise RuntimeError("o Claude devolveu um corte vazio")
+        s = snapped[0]
+        peak, anchor = picker._snap_anchor(new, _anchors(events))
+        anchor = {k: anchor[k] for k in ("kind", "t", "placar") if k in anchor} if anchor else None
+        _set_clip(job_id, idx, start=s["start"], end=s["end"], peak=peak, anchor=anchor,
+                  title=new.title, redo={"instrucao": instruction, "resposta": (raw.get("resposta") or "").strip()})
+    except Exception as exc:
+        traceback.print_exc()
+        _set_clip(job_id, idx, status="error", error=f"não consegui refazer: {exc}")
+        return
+    _render_one(job_id, idx, _words(job_id))
+
+
+def timeline(job_id: str) -> dict:
+    """Linha do tempo da live para a tela: partidas e gols (placar), reações fortes e os cortes que já existem."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    d = _dir(job_id)
+    hud_data = json.loads((d / "hud_events.json").read_text(encoding="utf-8")) if (d / "hud_events.json").exists() else {}
+    loud = json.loads((d / "loudness.json").read_text(encoding="utf-8")) if (d / "loudness.json").exists() else []
+    starts = _match_starts(job_id)
+    return {
+        "duration": job["source"].get("duration") or 0,
+        "partidas": [round(t, 1) for t in starts],
+        "eventos": [{k: e.get(k) for k in ("t", "tipo", "placar", "relogio", "fim_pausa")}
+                    for e in hud_data.get("events", []) if e.get("tipo") in ("gol_nosso", "gol_deles", "fim_do_tempo")],
+        "reacoes": signals.robust_peaks(loud),
+        "cortes": [{"n": c["n"], "start": c["start"], "end": c["end"], "title": c["title"]} for c in job["clips"]],
+    }
+
+
+def save_script(job_id: str, key: str, text: str) -> dict:
+    """Roteiro editado à mão: regrava o .txt e refaz o .srt a partir das linhas "[  12.3s] fala" (sem render)."""
+    from . import highlights
+
+    job = get(job_id)
+    hl = (job or {}).get("highlight") or {}
+    v = hl.get(key)
+    if not v:
+        raise ValueError("versão não encontrada")
+    total = float(v.get("duration") or 0)
+    srt = highlights.srt_from_script(text, total)
+    if not srt:
+        raise ValueError("nenhuma fala com tempo no formato [  12.3s] texto")
+    (JOBS_DIR / v["roteiro"]).write_text(text, encoding="utf-8")
+    (JOBS_DIR / v["srt"]).write_text(srt, encoding="utf-8")
+    v["rev"] = int(v.get("rev", 0)) + 1
+    hl[key] = v
+    update(job_id, highlight=hl)
+    return v
+
+
+def _missing_goals(events: list[dict], candidates: list, start: float, end: float) -> list:
+    """Gols do placar que o Claude não propôs: no resumo narrado todos os gols entram (o estilo do @howardrl)."""
+    out = []
+    for e in events:
+        if e["kind"] not in ("gol_nosso", "gol_deles") or not start <= e["t"] <= end:
+            continue
+        if any(c.start - 2 <= e["t"] <= c.end + 2 for c in candidates):
+            continue
+        who = "Gol do time" if e["kind"] == "gol_nosso" else "Gol sofrido"
+        out.append(picker.Clip(title=f"{who} {e.get('placar', '')}".strip(), start=max(start, e["t"] - 10),
+                               end=min(end, e["t"] + 8), peak=e["t"], score=70,
+                               reason=f"{who.lower()} lido no placar ({e.get('placar', '')}); entra para contar a partida"))
+    return out
 
 
 def compile_highlights(job_id: str) -> None:
@@ -536,14 +678,15 @@ def _compile_highlights(job_id: str) -> None:
     out_dir = d / "highlights"
     out_dir.mkdir(exist_ok=True)
     fps = min(src.get("fps") or 30, 60)
-    done = [c for c in job["clips"] if c.get("status") == "done"]
+    done = sorted((c for c in job["clips"] if c.get("status") == "done"), key=lambda c: c["start"])
     if not done:
         raise RuntimeError("nenhum lance renderizado")
 
     short = [c for c in done if c.get("no_short")] or done
     update(job_id, status="rendering", message="Montando o short vertical…", progress=0.6)
     vsegs = [plain_clip(c["file"]) for c in short]
-    vstarts = highlights.compile_video(vsegs, [], "", out_dir / "short-vertical.mp4", 1080, 1920, fps)
+    card = f"VS {hl['adversario']}" if hl.get("adversario") else ""  # card do adversário na abertura
+    vstarts = highlights.compile_video(vsegs, [], card, out_dir / "short-vertical.mp4", 1080, 1920, fps)
 
     hsegs = []
     for k, c in enumerate(done, 1):
@@ -554,7 +697,7 @@ def _compile_highlights(job_id: str) -> None:
                                       opts.get("voice_enhance", True))
         hsegs.append(out)
     update(job_id, message="Montando a versão horizontal…", progress=0.92)
-    hstarts = highlights.compile_video(hsegs, [], "", out_dir / "horizontal.mp4", 1920, 1080, fps)
+    hstarts = highlights.compile_video(hsegs, [], card, out_dir / "horizontal.mp4", 1920, 1080, fps)
 
     versions = {"vertical": (short, vsegs, vstarts, "short-vertical"), "horizontal": (done, hsegs, hstarts, "horizontal")}
     for key, (clips, segs, starts, name) in versions.items():
@@ -594,7 +737,7 @@ def _visual_review(job_id: str, backend: str, candidates, transcript, events, st
         system += f"\n\nGuia de estilo a seguir (\"{style['name']}\"):\n{style['guide']}"
     system += titles.guide(JOBS_DIR)
     prompt = picker.review_prompt(candidates, transcript, events, windows, [p.name for p in images], opts)
-    raw = picker.ask(backend, system, prompt, picker.REVIEW_SCHEMA, images)
+    raw = picker.ask(backend, system, prompt, picker.REVIEW_SCHEMA, images, step="cortes_revisao")
     (_dir(job_id) / "review.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     out = []
     for item in raw.get("clips", []):
@@ -626,7 +769,7 @@ def _retitle(job_id: str, backend: str) -> None:
     words = _words(job_id)
     speech = {c["n"]: " ".join(w["w"] for w in words if c["start"] <= w["s"] < c["end"]) for c in job["clips"]}
     prompt = titles.retitle_prompt(job["clips"], speech)
-    raw = picker.ask(backend, titles.RETITLE_SYSTEM + titles.guide(JOBS_DIR), prompt, titles.RETITLE_SCHEMA)
+    raw = picker.ask(backend, titles.RETITLE_SYSTEM + titles.guide(JOBS_DIR), prompt, titles.RETITLE_SCHEMA, step="titulos")
     (_dir(job_id) / "titles.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
 
     changed, to_render = [], []
@@ -695,7 +838,7 @@ def _accept_plan(job_id: str, raw: dict) -> None:
     anchors = _anchors(_timeline(job_id, backend, loud, words))
     clips = picker.snap_clips(picker.parse_plan(raw), words, src["duration"], opts["min_len"], opts["max_len"],
                               anchors=anchors)
-    clips = clips[: int(opts["num_clips"])]
+    clips = _diversify(clips, int(opts["num_clips"]), _match_starts(job_id))
     if not clips:
         raise RuntimeError("nenhum candidato passou na revisão — tente outras instruções ou desligue a revisão visual")
     for i, c in enumerate(clips, 1):
@@ -705,6 +848,48 @@ def _accept_plan(job_id: str, raw: dict) -> None:
     update(job_id, clips=clips, status="rendering", progress=0.0)
     titles.record(JOBS_DIR, job_id, clips)
     _render_all(job_id, words)
+
+
+PER_MATCH = 2  # no teste do P0, 3 de 4 cortes saíram da mesma partida
+
+
+def _match_starts(job_id: str) -> list[float]:
+    """Começos de partida lidos no placar: 0x0 ou placar que diminui (partida nova)."""
+    f = _dir(job_id) / "hud_events.json"
+    if not f.exists():
+        return []
+    starts, prev = [], None
+    for e in json.loads(f.read_text(encoding="utf-8")).get("events", []):
+        try:
+            sc = tuple(int(x) for x in (e.get("placar") or "").split(" x "))
+        except ValueError:
+            continue
+        if len(sc) != 2:
+            continue
+        if e["tipo"] == "inicio" or prev is None or sc[0] < prev[0] or sc[1] < prev[1]:
+            starts.append(e["t"] - 10)
+        prev = sc
+    return starts
+
+
+def _diversify(clips: list[dict], want: int, match_starts: list[float]) -> list[dict]:
+    """Os melhores cortes, com no máximo PER_MATCH por partida; se faltar opção em outras partidas, completa
+    com o que sobrou (qualidade primeiro, variedade quando dá). `clips` já vem ordenado por nota."""
+    if len(match_starts) < 2:
+        return clips[:want]
+    match_of = lambda t: sum(1 for s0 in match_starts if s0 <= t)
+    picked, overflow, count = [], [], {}
+    for c in clips:
+        m = match_of(c.get("peak") or c["start"])
+        if count.get(m, 0) < PER_MATCH:
+            picked.append(c)
+            count[m] = count.get(m, 0) + 1
+        else:
+            overflow.append(c)
+        if len(picked) == want:
+            break
+    picked += overflow[: want - len(picked)]
+    return sorted(picked, key=lambda c: c.get("score", 0), reverse=True)
 
 
 def _stranger_test(job_id: str, backend: str, clips: list[dict], words: list[dict]) -> None:
@@ -722,7 +907,7 @@ def _stranger_test(job_id: str, backend: str, clips: list[dict], words: list[dic
         return
     update(job_id, message="Conferindo se cada corte se entende sem contexto…")
     try:
-        raw = picker.ask(backend, picker.STRANGER_SYSTEM, picker.stranger_prompt(items), picker.STRANGER_SCHEMA, imgs)
+        raw = picker.ask(backend, picker.STRANGER_SYSTEM, picker.stranger_prompt(items), picker.STRANGER_SCHEMA, imgs, step="teste_estranho")
     except Exception as exc:  # o teste é uma guarda: se falhar, os cortes seguem sem ele
         traceback.print_exc()
         update(job_id, message=f"Teste sem contexto indisponível ({str(exc)[:80]}); seguindo")
@@ -813,6 +998,36 @@ def _set_clip(job_id: str, idx: int, **fields) -> None:
         _save(_jobs[job_id])
 
 
+MOTION_Z = 3.0  # movimento do rosto bem acima do resto do trecho = reação
+
+
+def _aim_reactions(job_id: str, clip: dict, zooms: list[float]) -> list[float]:
+    """Mira o zoom no pico de movimento do rosto: ±2 s em volta da reação que o Claude viu, ou até 8 s
+    depois do lance quando ele não marcou nenhuma. Sem rosto detectado, fica como estava."""
+    job = get(job_id)
+    src = job["source"]
+    try:
+        boxes = reframe.face_positions(Path(src["path"]), clip["start"], clip["end"] - clip["start"],
+                                       src["width"], src["height"])
+        face = reframe.face_box(boxes)
+        if not face:
+            return zooms
+        out = []
+        windows = [(z - 2, z + 2) for z in zooms] or (
+            [(clip["peak"], min(clip["end"], clip["peak"] + 8))] if clip.get("peak") else [])
+        for a, b in windows:
+            a, b = max(clip["start"], a), min(clip["end"], b)
+            hit = reframe.motion_peak(Path(src["path"]), a, b, src["width"], src["height"], face)
+            if hit and hit[1] >= MOTION_Z:
+                out.append(round(hit[0], 2))
+            elif zooms:
+                out.append(round((a + b) / 2, 2))  # rosto parado: mantém o segundo do Claude
+        return out
+    except Exception:
+        traceback.print_exc()
+        return zooms
+
+
 def _edit_plan(job_id: str, clip: dict, opts: dict, words: list[dict]) -> tuple[list | None, list[float]]:
     """Jump cuts (pausas mortas) e momentos de zoom de um clipe."""
     loud_file = _dir(job_id) / "loudness.json"
@@ -821,7 +1036,8 @@ def _edit_plan(job_id: str, clip: dict, opts: dict, words: list[dict]) -> tuple[
     zooms: list[float] = []
     if opts.get("auto_zoom", True):
         zooms = [r for r in clip.get("reactions") or [] if start <= r <= end]
-        if not zooms and loud:  # sem dica do Claude: usa o maior pico de volume do trecho
+        zooms = _aim_reactions(job_id, clip, zooms)
+        if not zooms and loud:  # sem dica do Claude nem rosto se mexendo: usa o maior pico de volume do trecho
             peaks = [e for e in signals.audio_events(loud, words)
                      if start <= e["t"] <= end and e["kind"] in signals.LOUD_KINDS and e["db"] >= 9]
             if peaks:
@@ -1150,8 +1366,10 @@ def apply_all(job_id: str, changes: dict) -> int:
     return len(job["clips"])
 
 
-def create_clip(job_id: str, start: float, end: float, title: str = "") -> dict:
-    """Clipe feito à mão (ex.: a partir de uma busca na transcrição)."""
+def create_clip(job_id: str, start: float, end: float, title: str = "", extra: dict | None = None,
+                render: bool = True) -> dict:
+    """Clipe feito à mão (busca na transcrição, linha do tempo, ou um momento que o Claude tinha descartado).
+    No resumo da partida, o clipe novo é um lance: entra no short e não leva título gravado."""
     job = get(job_id)
     if not job:
         raise KeyError(job_id)
@@ -1168,11 +1386,163 @@ def create_clip(job_id: str, start: float, end: float, title: str = "") -> dict:
         "hook": "", "reason": "Clipe criado manualmente.", "visual": "", "score": 0, "scores": {},
         "hashtags": [], "peak": None, "reactions": [], "keywords": [], "post": "",
     }
+    clip.update({k: v for k, v in (extra or {}).items() if k in ("peak", "reason", "visual", "score", "candidate")})
+    if job["options"].get("mode") == "highlights":
+        clip.update({"no_short": True, "tipo": "jogada", "narracao": [], "overrides": {"title_overlay": False}})
     with _lock:
         _jobs[job_id]["clips"].append(clip)
         _save(_jobs[job_id])
-    _worker.submit(_render_one, job_id, len(job["clips"]), words)
+    if render:
+        _worker.submit(_render_one, job_id, len(job["clips"]), words)
     return clip
+
+
+def alternatives(job_id: str) -> list[dict]:
+    """Momentos que o Claude analisou e não viraram corte: os da etapa 1 que não passaram, ou que passaram mas
+    ficaram fora da quantidade pedida. Os que já se sobrepõem a um corte existente não aparecem."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    d = _dir(job_id)
+    cand_file = d / "candidates.json"
+    if not cand_file.exists():
+        return []
+    cands = json.loads(cand_file.read_text(encoding="utf-8")).get("clips", [])
+    review_file = d / ("highlight-review.json" if job["options"].get("mode") == "highlights" else "review.json")
+    reviewed = []
+    if review_file.exists():
+        data = json.loads(review_file.read_text(encoding="utf-8"))
+        reviewed = [r for r in data.get("lances") or data.get("clips") or [] if "start" in r and "end" in r]
+    # casa pelo TRECHO, não pelo número: no resumo a lista revisada mistura candidatos e gols injetados
+    items = [(r, None) for r in reviewed]
+    for c in cands:
+        a, b = float(c.get("start", 0)), float(c.get("end", 0))
+        if not any(min(b, float(r["end"])) - max(a, float(r["start"])) > 0.5 * (b - a) for r in reviewed):
+            items.append((None, c))  # não chegou à revisão
+    used = [(c["start"], c["end"]) for c in job["clips"]]
+    out = []
+    for k, (r, c) in enumerate(items, 1):
+        src_ = r or c
+        start, end = float(src_["start"]), float(src_["end"])
+        if end - start < 2:
+            continue
+        overlap = max((min(end, b) - max(start, a) for a, b in used), default=0)
+        if overlap > 0.5 * (end - start):
+            continue
+        situacao = ("descartado na revisão" if r and not r.get("keep", True) else
+                    "ficou fora da quantidade pedida" if r else "não chegou à revisão")
+        out.append({
+            "id": f"m{k}-{int(start)}", "start": round(start, 2), "end": round(end, 2), "peak": src_.get("peak"),
+            "title": (src_.get("label") or src_.get("title") or "").strip(), "visual": (src_.get("visual") or "").strip(),
+            "reason": (src_.get("reason") or "").strip(), "score": int(src_.get("score") or 0), "situacao": situacao,
+        })
+    return sorted(out, key=lambda a: a["score"], reverse=True)
+
+
+def use_alternative(job_id: str, alt_id: str) -> dict:
+    alt = next((a for a in alternatives(job_id) if a["id"] == alt_id), None)
+    if not alt:
+        raise ValueError("esse momento não está mais disponível (talvez já tenha virado corte)")
+    return create_clip(job_id, alt["start"], alt["end"], alt["title"],
+                       extra={"peak": alt["peak"], "reason": f"Escolhido por você entre os momentos que o Claude descartou. {alt['reason']}",
+                              "visual": alt["visual"], "score": alt["score"]})
+
+
+def edit_recap(job_id: str, instruction: str) -> None:
+    """Pedido em texto livre para mudar o resumo da partida: o Claude devolve operações, o Cortaí aplica e
+    remonta os vídeos. Só texto (sem imagens): custa pouco."""
+    job = get(job_id)
+    if not job or job["options"].get("mode") != "highlights" or not job["clips"]:
+        raise ValueError("isso vale para o resumo da partida")
+    if job["status"] not in ("done", "error"):
+        raise ValueError("espere o processamento terminar")
+    if not (instruction or "").strip():
+        raise ValueError("escreva o que mudar")
+    backend = picker.resolve_backend(job.get("backend") or job["options"].get("backend", "auto"))
+    if backend == "manual":
+        raise ValueError("pedir mudanças precisa do Claude Code logado ou de ANTHROPIC_API_KEY")
+    hl = dict(job.get("highlight") or {})
+    hl["pedido"] = {"instrucao": instruction.strip(), "resposta": "Pensando…"}
+    update(job_id, status="rendering", progress=0.0, error=None, message="Claude aplicando o seu pedido…", highlight=hl)
+    _worker.submit(_guard, job_id, _edit_recap, instruction.strip(), backend)
+
+
+def _edit_recap(job_id: str, instruction: str, backend: str) -> None:
+    from . import highlights
+
+    job = get(job_id)
+    opts, src = job["options"], job["source"]
+    start = float(opts.get("range_start") or 0)
+    end = float(opts.get("range_end") or 0) or src["duration"]
+    lances = sorted(job["clips"], key=lambda c: c["start"])
+    f = _dir(job_id) / "hud_events.json"
+    events = json.loads(f.read_text(encoding="utf-8")).get("events", []) if f.exists() else []
+    raw = picker.ask(backend, highlights.EDIT_SYSTEM,
+                     highlights.edit_prompt(instruction, lances, events, alternatives(job_id), start, end),
+                     highlights.EDIT_SCHEMA, step="resumo_pedido")
+    words = _words(job_id)
+    by_n = {c["n"]: c for c in job["clips"]}
+    to_render, removed, added = [], [], 0
+    for op in raw.get("operacoes") or []:
+        a, n = op.get("acao"), op.get("n")
+        if a in ("remover", "short_sim", "short_nao", "ajustar") and n not in by_n:
+            continue
+        if a == "remover":
+            removed.append(n)
+        elif a in ("short_sim", "short_nao"):
+            set_lance(job_id, n, a == "short_sim")
+        elif a == "ajustar" and op.get("start") is not None and op.get("end") is not None:
+            s0, e0 = max(start, float(op["start"])), min(end, float(op["end"]))
+            if e0 - s0 >= 2:
+                idx = _clip_index(get(job_id), n)
+                _set_clip(job_id, idx, start=round(s0, 2), end=round(e0, 2), status="pending")
+                to_render.append(idx)
+        elif a == "adicionar" and op.get("start") is not None and op.get("end") is not None:
+            s0, e0 = max(start, float(op["start"])), min(end, float(op["end"]))
+            if e0 - s0 >= 2:
+                c = create_clip(job_id, s0, e0, (op.get("titulo") or "").strip()[:60], render=False)
+                to_render.append(_clip_index(get(job_id), c["n"]))
+                added += 1
+    # renderiza ANTES de remover: remover muda as posições na lista e o índice apontaria para outro lance
+    for idx in sorted(set(to_render)):
+        update(job_id, message="Renderizando os lances mudados…")
+        _render_one(job_id, idx, words)
+    for n in removed:
+        delete_clip(job_id, n)
+    hl = dict(get(job_id).get("highlight") or {})
+    hl["pedido"] = {"instrucao": instruction, "resposta": (raw.get("resposta") or "").strip()}
+    update(job_id, highlight=hl)
+    _compile_highlights(job_id)
+
+
+def match_preview(job_id: str) -> dict:
+    """Prévia leve (H.264) só do trecho da partida, para o editor da partida: a live original costuma ser HEVC,
+    que nem todo navegador toca. Gerada uma vez e guardada no projeto."""
+    job = get(job_id)
+    if not job:
+        raise KeyError(job_id)
+    src, opts = job["source"], job["options"]
+    start = float(opts.get("range_start") or 0)
+    end = float(opts.get("range_end") or 0) or src["duration"]
+    name = f"partida_{int(start * 10)}_{int(end * 10)}.mp4"
+    out = _dir(job_id) / name
+    if not out.exists():
+        render.proxy(Path(src["path"]), src, start, end, out)
+    f = _dir(job_id) / "hud_events.json"
+    events = json.loads(f.read_text(encoding="utf-8")).get("events", []) if f.exists() else []
+    return {"file": f"{job_id}/{name}", "start": start, "end": end,
+            "eventos": [{k: e.get(k) for k in ("t", "tipo", "placar")} for e in events
+                        if start <= e["t"] <= end and e.get("tipo") in ("gol_nosso", "gol_deles", "fim_do_tempo")]}
+
+
+def set_lance(job_id: str, n: int, no_short: bool) -> None:
+    """Resumo da partida: o lance entra ou não no short (o horizontal usa todos). Vale ao remontar os vídeos."""
+    with _lock:
+        job = _jobs.get(job_id)
+        if not job:
+            raise KeyError(job_id)
+        job["clips"][_clip_index(job, n)]["no_short"] = bool(no_short)
+        _save(job)
 
 
 FEEDBACK_REASONS = {
@@ -1372,7 +1742,7 @@ def _learn_style(style_id: str, backend: str) -> None:
         shutil.rmtree(ref_dir, ignore_errors=True)  # guarda só a folha de frames
     progress("Claude estudando as referências…")
     raw = picker.ask(backend, styles.LEARN_SYSTEM, styles.learn_prompt(refs, st.get("notes", "")),
-                     styles.LEARN_SCHEMA, images)
+                     styles.LEARN_SCHEMA, images, step="estilo_aprender")
     st.update(guide=raw["guide"].strip(), summary=raw.get("summary", "").strip(), status="ready",
               message="Pronto", error=None,
               images=[f"_styles/{style_id}/{p.name}" for p in images])

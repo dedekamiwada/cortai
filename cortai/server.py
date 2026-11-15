@@ -275,10 +275,75 @@ async def match_highlights(job_id: str, n: int, request: Request):
     _job_or_404(job_id)
     body = await request.json()
     try:
-        job = jobs.create_match_job(job_id, n, body.get("basis") or "fala_imagem")
+        job = jobs.create_match_job(job_id, n, body.get("basis") or "fala_imagem", body.get("serie"))
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(400, str(exc))
     return {"id": job["id"]}
+
+
+@app.get("/api/jobs/{job_id}/alternativas")
+def job_alternatives(job_id: str):
+    _job_or_404(job_id)
+    return jobs.alternatives(job_id)
+
+
+@app.post("/api/jobs/{job_id}/alternativas/{alt_id}")
+def use_alternative(job_id: str, alt_id: str):
+    _job_or_404(job_id)
+    try:
+        return jobs.use_alternative(job_id, alt_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/jobs/{job_id}/partida")
+async def match_preview(job_id: str):
+    _job_or_404(job_id)
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(jobs.match_preview, job_id)
+
+
+@app.post("/api/jobs/{job_id}/resumo/pedido")
+async def recap_request(job_id: str, request: Request):
+    _job_or_404(job_id)
+    try:
+        jobs.edit_recap(job_id, (await request.json()).get("instrucao") or "")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/clips/{n}/lance")
+async def set_lance(job_id: str, n: int, request: Request):
+    _job_or_404(job_id)
+    jobs.set_lance(job_id, n, bool((await request.json()).get("no_short")))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/clips/{n}/redo")
+async def redo_clip(job_id: str, n: int, request: Request):
+    _job_or_404(job_id)
+    try:
+        jobs.redo_clip(job_id, n, (await request.json()).get("instrucao") or "")
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.get("/api/jobs/{job_id}/timeline")
+def job_timeline(job_id: str):
+    _job_or_404(job_id)
+    return jobs.timeline(job_id)
+
+
+@app.post("/api/jobs/{job_id}/roteiro/{key}")
+async def save_script(job_id: str, key: str, request: Request):
+    _job_or_404(job_id)
+    try:
+        v = jobs.save_script(job_id, key, (await request.json()).get("texto") or "")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "versao": v}
 
 
 @app.post("/api/jobs/{job_id}/compile")

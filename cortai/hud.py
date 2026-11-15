@@ -23,6 +23,10 @@ import numpy as np
 from . import picker
 
 STEP = 2.0              # keyframes do OBS: 1 a cada 2 s
+# Ler placar e marcar caixas é tarefa mecânica. Medido contra 22 gols conhecidos (3 partidas): Haiku com esforço
+# baixo acertou 3/3 partidas, igual ao Opus com esforço alto, custando US$ 0,004 contra US$ 0,129. Para não perder
+# qualidade, qualquer leitura inconsistente é refeita no modelo principal (Opus).
+FAST_MODEL, FAST_EFFORT = "claude-haiku-5-5", "low"
 MIN_FREEZE = 3          # keyframes iguais seguidos (6 s) = relógio parado
 CLOCK_SAME = 0.92       # IoU da máscara do relógio para "mesmo valor"
 
@@ -62,16 +66,29 @@ def calibrate(backend: str, src: Path, meta: dict, times: list[float], work: Pat
         img = _frame(src, t, work / f"calib-{i}.jpg")
         if not img.exists():
             continue
-        raw = picker.ask(backend, CALIBRATE_SYSTEM,
-                         f"Quadro de {meta['width']}x{meta['height']} px. Onde estão as caixas do placar?",
-                         CALIBRATE_SCHEMA, [img])
-        if not raw.get("visivel"):
+        raw = _calibrate_ask(backend, img, meta)
+        if raw is None:
             continue
         boxes = {k: [int(raw[k][c]) for c in ("x", "y", "w", "h")] for k in ("esquerda", "relogio", "direita")}
         frame = cv2.imdecode(np.fromfile(str(img), np.uint8), cv2.IMREAD_COLOR)
         sats = [_box_sat(_crop(frame, boxes[k], 0)) for k in ("esquerda", "direita")]
         if all(s > 60 for s in sats):  # as duas caixas são coloridas: a marcação faz sentido
             return {"boxes": boxes, "frame_w": meta["width"], "frame_h": meta["height"]}
+    return None
+
+
+def _calibrate_ask(backend: str, img: Path, meta: dict) -> dict | None:
+    """Marca as caixas com o modelo rápido; se a marcação não passa no teste de cor, tenta o modelo principal."""
+    for model, effort in ((FAST_MODEL, FAST_EFFORT), (None, None)):
+        raw = picker.ask(backend, CALIBRATE_SYSTEM,
+                         f"Quadro de {meta['width']}x{meta['height']} px. Onde estão as caixas do placar?",
+                         CALIBRATE_SCHEMA, [img], step="placar_calibrar", model=model, effort=effort)
+        if not raw.get("visivel"):
+            continue  # "não vi placar" do modelo rápido é conferido pelo principal antes de desistir do quadro
+        boxes = {k: [int(raw[k][c]) for c in ("x", "y", "w", "h")] for k in ("esquerda", "relogio", "direita")}
+        frame = cv2.imdecode(np.fromfile(str(img), np.uint8), cv2.IMREAD_COLOR)
+        if all(_box_sat(_crop(frame, boxes[k], 0)) > 60 for k in ("esquerda", "direita")):
+            return raw
     return None
 
 
@@ -210,6 +227,7 @@ PER_SHEET = 24
 
 
 def _sheets(items: list[dict], crops: list[np.ndarray], work: Path) -> list[Path]:
+    work.mkdir(parents=True, exist_ok=True)
     paths = []
     for s0 in range(0, len(items), PER_SHEET):
         tiles = []
@@ -238,9 +256,43 @@ def read_events(backend: str, src: Path, meta: dict, calib: dict, start: float, 
     for n, it in enumerate(items, 1):
         it["n"] = n
     sheets = _sheets(items, crops, work)
-    raw = picker.ask(backend, READ_SYSTEM, f"Leia os {len(items)} itens das folhas.", READ_SCHEMA, sheets)
+    raw = picker.ask(backend, READ_SYSTEM, f"Leia os {len(items)} itens das folhas.", READ_SCHEMA, sheets,
+                     step="placar_ler", model=FAST_MODEL, effort=FAST_EFFORT)
     reads = {r["n"]: r for r in raw.get("itens") or []}
-    return classify(items, reads), spans
+    events = classify(items, reads)
+    doubt = _suspects(events, reads, items)
+    if doubt:
+        # o modelo principal relê SÓ as pausas suspeitas (e a anterior a cada uma): na live de teste, um único
+        # buraco real da varredura fazia reler 97 pausas (US$ 0,24) para chegar à mesma leitura do Haiku
+        again = [it for it in items if it["n"] in doubt]
+        fix = picker.ask(backend, READ_SYSTEM, f"Leia os {len(again)} itens das folhas.", READ_SCHEMA,
+                         _sheets(again, crops, work / "conferencia"), step="placar_conferir")
+        for r in fix.get("itens") or []:
+            if r.get("n") in doubt:
+                reads[r["n"]] = r
+        events = classify(items, reads)
+    return events, spans
+
+
+def _suspects(events: list[dict], reads: dict, items: list[dict]) -> set[int]:
+    """Itens a conferir: sem leitura, ou placar que mudou sem ser exatamente um gol a mais (nem partida nova) —
+    esse item e o anterior (um dos dois pode estar lido errado)."""
+    out = {it["n"] for it in items if it["n"] not in reads}
+    prev, prev_n = None, None
+    for it, e in zip(items, events):
+        try:
+            sc = tuple(int(x) for x in (e.get("placar") or "").split(" x "))
+        except ValueError:
+            continue
+        if len(sc) != 2:
+            continue
+        changed = prev is not None and sc != prev
+        new_match = prev is not None and (sc[0] < prev[0] or sc[1] < prev[1])
+        if e["tipo"] == "pausa" and changed and not new_match:
+            out |= {it["n"], prev_n}  # o placar mudou de um jeito que não é um gol: leitura duvidosa
+        prev, prev_n = sc, it["n"]
+    out.discard(None)
+    return out
 
 
 def _step(prev: tuple, cur: tuple) -> str | None:

@@ -126,3 +126,46 @@ def sendcmd_script(path: list[float], src_w: int, crop_w: int, dur: float, step:
         lines.append(f"{t:.2f} crop x {x};")
         t += step
     return "\n".join(lines) + "\n", first_x or 0
+
+
+
+# ------------------------------------------------------------------ movimento do rosto (reação)
+MOTION_FPS = 6
+MOTION_PAD = 6.0  # s de folga para a linha de base: numa janela de 4 s a própria reação domina a mediana
+
+
+def motion_peak(src: Path, start: float, end: float, src_w: int, src_h: int,
+                face: tuple[float, float, float] | None) -> tuple[float, float] | None:
+    """Segundo de maior movimento na região do rosto e seu z robusto contra o próprio trecho.
+
+    Medido numa live real: o pico de movimento caiu em 3184,0 s onde o Claude viu "saindo da cadeira" em
+    3183,9 s (z=7,6). Usado para mirar o zoom de reação no instante certo. None sem rosto ou trecho curto."""
+    if face is None or end - start < 1.0:
+        return None
+    cx, cy, fw = face
+    side = min(1.0, fw * 3.2)  # a reação usa ombros e mãos, não só o rosto
+    x0 = int(max(0.0, cx - side / 2) * src_w)
+    y0 = int(max(0.0, cy - side * 0.6) * src_h)
+    cw = int(min(src_w - x0, side * src_w)) // 2 * 2
+    ch = int(min(src_h - y0, side * src_w * 1.1)) // 2 * 2
+    if cw < 16 or ch < 16:
+        return None
+    w, h = 160, max(16, int(160 * ch / cw) // 2 * 2)
+    a0 = max(0.0, start - MOTION_PAD)
+    cmd = ["ffmpeg", "-v", "error", "-ss", f"{a0:.3f}", "-t", f"{end + MOTION_PAD - a0:.3f}", "-i", str(src),
+           "-vf", f"crop={cw}:{ch}:{x0}:{y0},scale={w}:{h},fps={MOTION_FPS},format=gray",
+           "-f", "rawvideo", "-"]
+    raw = subprocess.run(cmd, capture_output=True).stdout
+    n = len(raw) // (w * h)
+    if n < 3:
+        return None
+    fr = np.frombuffer(raw[: n * w * h], np.uint8).reshape(n, h, w).astype(np.float32)
+    energy = np.abs(np.diff(fr, axis=0)).mean(axis=(1, 2))
+    med = float(np.median(energy))
+    mad = float(np.median(np.abs(energy - med))) * 1.4826 + 1e-6
+    times = a0 + (np.arange(len(energy)) + 1) / MOTION_FPS
+    inside = np.where((times >= start) & (times <= end))[0]
+    if not len(inside):
+        return None
+    k = int(inside[np.argmax(energy[inside])])
+    return float(times[k]), float((energy[k] - med) / mad)
