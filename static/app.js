@@ -1493,6 +1493,8 @@ async function openEditor(jobId, n) {
   $("#ed-pos").value = o.pos_susto || "";
   $("#ed-pos-music").checked = !!o.pos_susto_musica;
   $("#ed-pos-secs").value = o.pos_susto_segundos ?? 1.5;
+  ed.posAt = o.pos_susto_em ?? null;
+  showPosWhen();
   const c0 = data.clip;
   $("#ed-rosto").checked = !!o.rosto_risada;
   const nr = (c0.rostos_risada || []).length;
@@ -1501,9 +1503,10 @@ async function openEditor(jobId, n) {
     : o.rosto_risada ? "Não entrou: nenhuma risada longa no trecho, ou não achei o rosto na live."
     : "No pico das risadas mais longas a câmera ocupa a tela toda por 1,6 s e volta. Precisa do projeto com \"Detectar risadas\".";
   $("#ed-pos-info").textContent = c0.pos_susto_at != null
-    ? `Começa em ${c0.pos_susto_at.toFixed(1)} s do clipe (no susto marcado)` + (c0.pos_susto_pause ? `, pausa de ${c0.pos_susto_pause} s` : "") + (c0.pos_susto_music ? ` · música: ${c0.pos_susto_music}` : "")
-    : o.pos_susto ? "Não entrou neste clipe: o susto marcado ficou perto demais do começo ou do fim."
-    : "Pausa: no susto o vídeo inteiro e o som param por alguns segundos e depois continuam. Preto e branco: do susto até o fim. Para a música, ponha arquivos que você tem direito de usar na pasta musicas/pos_susto da biblioteca.";
+    ? `Começa em ${c0.pos_susto_at.toFixed(1)} s do clipe (${c0.pos_susto_origem === "manual" ? "no momento que você marcou" : "no susto do áudio"})` + (c0.pos_susto_pause ? `, pausa de ${c0.pos_susto_pause} s` : "") + (c0.pos_susto_music ? ` · música: ${c0.pos_susto_music}` : "")
+    : o.pos_susto && o.pos_susto_em == null ? "Não entrou neste clipe: não achei susto no áudio (silêncio e de repente som alto). Se tiver susto, marque o momento: pare o vídeo nele e clique em \"Marcar no ponto atual\"."
+    : o.pos_susto ? "Não entrou: o momento marcado ficou fora do corte."
+    : "Pausa: no susto o vídeo inteiro e o som param por alguns segundos e depois continuam. Preto e branco: do susto até o fim. Só entra sozinho em clipe com susto no áudio; para escolher o momento, marque no vídeo. Para a música, ponha arquivos que você tem direito de usar na pasta musicas/pos_susto da biblioteca.";
   $("#ed-keywords").checked = o.keyword_highlight !== false;
   $("#ed-kwcolor").value = o.keyword_color || "#39E75F";
   const kws = data.clip.keywords || [];
@@ -1631,10 +1634,41 @@ function drawTimeline() {
     ctx.fillText(a.w, x0 + 3, ADD_BAR.y + 12);
     ctx.restore();
   });
+  // pausa do susto marcada à mão
+  if (ed.posAt != null) {
+    ctx.fillStyle = "#e61e28";
+    ctx.fillRect(x(ed.posAt) - 1.5, 0, 3, H);
+    ctx.fillText("⏸", x(ed.posAt) + 3, 12);
+  }
   // cursor
   ctx.fillStyle = "#fff";
   ctx.fillRect(x(nowT()) - 1, 0, 2, H);
 }
+
+function showPosWhen() {
+  if (!ed) return;
+  $("#ed-pos-when").textContent = ed.posAt == null
+    ? "automático (só se tiver susto no áudio)"
+    : `${(ed.posAt - ed.sel.s).toFixed(1)} s do corte (marcado por você)`;
+  $("#ed-pos-go").disabled = ed.posAt == null;
+  $("#ed-pos-auto").disabled = ed.posAt == null;
+}
+$("#ed-pos-mark").onclick = () => {
+  if (!ed) return;
+  const t = nowT();
+  if (t < ed.sel.s || t > ed.sel.e) { $("#ed-error").textContent = "Pare o vídeo dentro do corte para marcar a pausa."; return; }
+  $("#ed-error").textContent = "";
+  ed.posAt = t;
+  if (!$("#ed-pos").value) $("#ed-pos").value = "congelar";
+  showPosWhen(); tick();
+  $("#ed-pos-info").textContent = "A pausa entra nesse ponto quando você salvar.";
+};
+$("#ed-pos-go").onclick = () => { if (ed && ed.posAt != null) seek(ed.posAt); };
+$("#ed-pos-auto").onclick = () => {
+  if (!ed) return;
+  ed.posAt = null; showPosWhen(); tick();
+  $("#ed-pos-info").textContent = "Ao salvar, a pausa só entra se tiver susto no áudio. Para nunca ter pausa, escolha \"Nenhum\".";
+};
 
 canvas.addEventListener("pointerdown", (e) => {
   if (!ed) return;
@@ -1965,6 +1999,7 @@ $("#ed-save").onclick = async () => {
     auto_zoom: $("#ed-zoom").checked, remove_pauses: $("#ed-pauses").checked,
     pos_susto: $("#ed-pos").value, pos_susto_segundos: +$("#ed-pos-secs").value || 1.5,
     pos_susto_musica: $("#ed-pos-music").checked, rosto_risada: $("#ed-rosto").checked,
+    pos_susto_em: ed.posAt == null ? null : +ed.posAt.toFixed(2),
     keyword_highlight: $("#ed-keywords").checked, keyword_color: $("#ed-kwcolor").value,
     word_fixes: ed.fixes,
     word_adds: ed.adds.map(({ w, s, e }) => ({ w, s, e })),

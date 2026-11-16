@@ -56,7 +56,8 @@ Estilo de corte embutido (**Estilo de corte → Terror**), destilado de 11 corte
   - **Pausa no susto** (padrão do estilo): o vídeo inteiro, sem zoom, para junto com o som e a legenda por alguns segundos (1,5 s por padrão, de 0,5 a 5) e depois continua de onde parou. O clipe fica mais longo pela duração da pausa, e o `.srt` acompanha.
   - **Pausa em preto e branco**: a mesma pausa com o quadro parado em P&B; depois a cor volta.
   - **Preto e branco até o fim**: do susto até o fim do clipe. Só entra se o susto cair depois de 30% do clipe e sobrarem de 1,5 a 20 s depois dele.
-  - O início é a reação marcada logo depois do `peak`, ou o `peak` + 0,7 s. Os quadros da capa são tirados antes do efeito.
+  - **Só entra sozinho em clipe com susto no áudio** (😱 dentro do corte); clipe sem susto não ganha pausa nem P&B. O início é a reação marcada logo depois do susto, ou o susto + 0,7 s. Os quadros da capa são tirados antes do efeito.
+  - **Momento escolhido à mão** (editor do clipe): pare o vídeo no ponto e clique em **📍 Marcar no ponto atual**. O efeito entra ali mesmo sem susto no áudio. **Automático** volta à detecção; **Nenhum** tira o efeito do clipe. A marca aparece em vermelho na linha do tempo.
 - **Música no pós-susto** (opcional): uma música da pasta `musicas/pos_susto` da biblioteca entra no susto, e o som da live abaixa para 35%. Ponha ali só músicas que você tem direito de usar. Para músicas famosas, deixe desligado e adicione o som pelo app do TikTok.
 
 ## Estilo Zoeira com amigos

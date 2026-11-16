@@ -72,7 +72,7 @@ STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color",
               "caption_position", "keyword_highlight", "keyword_color", "title_overlay", "title_mode",
               "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio",
               "voice_enhance", "pos_susto", "pos_susto_segundos", "pos_susto_musica", "rosto_risada")
-CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds")
+CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds", "pos_susto_em")
 COVER_KEYS = ("cover_auto", "cover_style", "cover_handle", "cover_in_video")  # padrões da capa
 SETTINGS_FILE = JOBS_DIR / "_settings.json"
 
@@ -1486,6 +1486,32 @@ def _edit_plan(job_id: str, clip: dict, opts: dict, words: list[dict]) -> tuple[
     return keep, zooms
 
 
+SCARE_NEAR_PEAK = 3.0  # s: o susto detectado no áudio precisa estar perto do pico que o Claude marcou
+
+
+def _scare_at(job_id: str, clip: dict, opts: dict, words: list[dict]) -> tuple[float | None, bool]:
+    """Onde entra o pós-susto (segundo na live) e se foi marcado à mão.
+
+    Marcado no editor (`pos_susto_em`) vale sempre. Senão, só entra se o áudio tiver um susto de verdade (😱:
+    silêncio e de repente som alto) dentro do corte: clipe sem susto não ganha pausa nem P&B."""
+    manual = opts.get("pos_susto_em")
+    if manual is not None:
+        return float(manual), True
+    loud_file = _dir(job_id) / "loudness.json"
+    if not loud_file.exists():
+        return None, False
+    loud = json.loads(loud_file.read_text(encoding="utf-8"))
+    scares = [e["t"] for e in signals.audio_events(loud, words)
+              if e["kind"] == "susto" and clip["start"] <= e["t"] <= clip["end"]]
+    if not scares:
+        return None, False
+    peak = clip.get("peak")
+    near = [t for t in scares if peak is not None and abs(t - float(peak)) <= SCARE_NEAR_PEAK]
+    if near:
+        return render.scare_time({**clip, "peak": min(near, key=lambda t: abs(t - float(peak)))}), False
+    return render.scare_time({**clip, "peak": max(scares)}), False  # o Claude marcou outro pico: usa o susto do áudio
+
+
 def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     job = get(job_id)
     if job["status"] == "cancelled":  # renderização que estava na fila de um projeto cancelado
@@ -1499,8 +1525,10 @@ def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     opts = {**job["options"], **clip.get("overrides", {})}
     opts.setdefault("title_text", clip["title"])
     opts["keywords"] = clip.get("keywords") or []
-    if opts.get("pos_susto") and opts.get("pos_susto_musica"):
-        opts["_pos_music"] = pos_susto_music(clip["n"])
+    if opts.get("pos_susto"):
+        opts["_pos_at"], opts["_pos_manual"] = _scare_at(job_id, clip, opts, words)
+        if opts.get("pos_susto_musica"):
+            opts["_pos_music"] = pos_susto_music(clip["n"])
     try:
         # legenda manual conta como fala: o corte de pausas não apaga o trecho dela
         keep, zooms = _edit_plan(job_id, clip, opts, captions.with_adds(words, opts.get("word_adds")))
@@ -1759,6 +1787,11 @@ def rerender(job_id: str, n: int, changes: dict) -> None:
         raise ValueError("word_fixes precisa ser um objeto {segundo: texto}")
     if "word_adds" in overrides:
         overrides["word_adds"] = _clean_adds(overrides["word_adds"])
+    if overrides.get("pos_susto_em") is not None:
+        try:
+            overrides["pos_susto_em"] = round(float(overrides["pos_susto_em"]), 2)
+        except (TypeError, ValueError):
+            raise ValueError("pos_susto_em precisa ser um número (segundo do vídeo)") from None
     recap = _is_recap(job)
     fields = {"start": round(start, 2), "end": round(end, 2), "overrides": overrides,
               "status": clip["status"] if recap else "pending"}

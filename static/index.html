@@ -528,6 +528,12 @@
         <h4>Depois do susto <span class="muted small">(terror)</span></h4>
         <select id="ed-pos"><option value="">Nenhum</option><option value="congelar">Pausa no susto (congela e volta)</option><option value="congelar_pb">Pausa no susto em preto e branco</option><option value="pb">Preto e branco até o fim</option></select>
         <label class="ed-range">Duração da pausa <input id="ed-pos-secs" type="number" min="0.5" max="5" step="0.5" value="1.5"> s</label>
+        <p class="small">Momento: <b id="ed-pos-when">automático</b></p>
+        <div class="row">
+          <button class="ghost" id="ed-pos-mark" type="button" title="Põe a pausa no ponto do vídeo onde o cursor está">📍 Marcar no ponto atual</button>
+          <button class="ghost" id="ed-pos-go" type="button">Ir até</button>
+          <button class="ghost" id="ed-pos-auto" type="button">Automático</button>
+        </div>
         <label class="check"><input id="ed-pos-music" type="checkbox"> Música da biblioteca a partir do susto</label>
         <p class="muted small" id="ed-pos-info"></p>
       </div>

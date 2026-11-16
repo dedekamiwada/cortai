@@ -301,9 +301,16 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
     pause = pos.startswith("congelar")
     pause_s = min(max(float(opts.get("pos_susto_segundos") or PAUSE_DEFAULT), PAUSE_MIN), PAUSE_MAX) if pause else 0.0
     pos_at = None
-    if pos in POS_SUSTO and scare_time(clip) is not None:
-        t = tm.to_out(scare_time(clip) - start)
-        if pause:
+    # _pos_at: segundo (na live) escolhido por quem chama — marcado no editor ou o susto detectado; None = não
+    # aplica. Sem a chave (Estúdio, chamadas antigas) vale o pico do Claude, como antes.
+    manual = opts.get("_pos_manual", False)
+    at = opts["_pos_at"] if "_pos_at" in opts else scare_time(clip)
+    if pos in POS_SUSTO and at is not None:
+        t = tm.to_out(float(at) - start)
+        if manual:
+            if 0.3 <= t <= out_dur - 0.3:
+                pos_at = t
+        elif pause:
             if 1.0 <= t <= out_dur - 0.5:
                 pos_at = t
         elif t >= out_dur * POS_MIN_FRAC and POS_MIN_AFTER <= out_dur - t <= POS_MAX_AFTER:
@@ -370,6 +377,7 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         "srt": "clip.srt",
         "time_map": [[round(a, 3), round(b, 3)] for a, b in tm.keep],
         "pos_susto_at": round(pos_at, 2) if pos_at is not None else None,
+        "pos_susto_origem": ("manual" if manual else "susto") if pos_at is not None else None,
         "pos_susto_pause": round(pause_s, 2) or None,
         "pos_susto_music": Path(music).name if music else None,
     }
