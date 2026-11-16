@@ -54,7 +54,7 @@ TERROR = {
                 "cortesloudyayah, chocomomentss, tiktokbistecone, pv.aguiar021, memes_br.0, ldcortes_10)"],
     # aplicada no formulário quando o estilo é escolhido (o usuário ainda pode mudar)
     "recipe": {
-        "min_len": 15, "max_len": 75, "content_type": "game",
+        "min_len": 15, "max_len": 75, "content_type": "game", "ler_placar": False,
         "caption_preset": "minimal", "caption_position": "middle", "keyword_color": "#E61E28",
         "title_overlay": True, "title_mode": "hook", "title_position": "band",
         "auto_zoom": True, "remove_pauses": False,
@@ -102,7 +102,7 @@ ZOEIRA = {
                 "fogoqueimadooficial, ewertoonclips, dailydocoringa, cortezadagg, cortessuetam, conkyuu, balasx2k, "
                 "galanedit)"],
     "recipe": {
-        "min_len": 20, "max_len": 75, "content_type": "game",
+        "min_len": 20, "max_len": 75, "content_type": "game", "ler_placar": False,
         "caption_preset": "minimal", "caption_position": "bottom", "caption_upper": False,
         "keyword_highlight": False,
         "title_overlay": True, "title_mode": "always", "title_position": "top",

@@ -112,6 +112,7 @@ const RECIPE_LABELS = {
   title_mode: (v) => (v === "hook" ? "título só no começo" : ""), remove_pauses: (v) => (v ? "" : "sem cortar pausas"),
   pos_susto: (v) => ({ congelar: "pausa no susto", pb: "P&B do susto até o fim", congelar_pb: "pausa no susto em P&B" }[v] || ""),
   cover_style: (v) => `capa ${v}`,
+  ler_placar: (v) => (v ? "" : "sem ler placar"),
   risadas: (v) => (v ? "risadas detectadas e fim no auge" : ""), rosto_risada: (v) => (v ? "rosto em tela cheia nas risadas" : ""),
 };
 // estilo com receita (ex.: Terror) preenche as opções do formulário; dá para mudar depois
@@ -120,6 +121,7 @@ function applyRecipe() {
   const box = $("#style-recipe");
   if (!st?.recipe) { box.classList.add("hidden"); return; }
   fillFields($("#job-form"), st.recipe);
+  syncType();
   const r = st.recipe;
   const bits = [r.min_len && r.max_len ? `clipes de ${r.min_len} a ${r.max_len} s` : "",
     ...Object.entries(r).filter(([k]) => !["min_len", "max_len"].includes(k)).map(([k, v]) => RECIPE_LABELS[k]?.(v))].filter(Boolean);
@@ -218,6 +220,7 @@ $("#job-form").addEventListener("submit", async (e) => {
   const options = {
     num_clips: +f.num_clips.value, min_len: +f.min_len.value, max_len: +f.max_len.value,
     instructions: f.instructions.value, content_type: f.content_type.value, style_id: f.style_id.value,
+    ler_placar: f.ler_placar.checked,
     visual_review: f.visual_review.checked, layout: f.layout.value,
     mode: f.mode.value, highlight_basis: f.highlight_basis.value, saidas: f.saidas.value,
     serie: f.serie.value.trim(), serie_n: f.serie_n.value ? +f.serie_n.value : null,
@@ -266,6 +269,12 @@ const syncMode = () => {
   $("#submit").textContent = hl ? "Gerar melhores momentos" : "Gerar cortes";
 };
 modeSelect.addEventListener("change", syncMode);
+function syncType() {  // "Ler o placar" só aparece para live de jogo
+  const game = $("#job-form [name=content_type]").value === "game";
+  $$(".game-only").forEach((el) => el.classList.toggle("hidden", !game));
+}
+$("#job-form [name=content_type]").addEventListener("change", syncType);
+syncType();
 
 // fetch não informa progresso de envio; XHR sim.
 function uploadFile(file, onProgress) {
@@ -388,7 +397,7 @@ function plannedSteps(job) {
   const o = job.options, seen = stepTimes(job), recap = o.mode === "highlights";
   const expect = {
     downloading: !!job.source.url, transcribing: !(recap && o.highlight_basis === "imagem"),
-    hud: o.content_type === "game", mapping: false, selecting: true,
+    hud: o.content_type === "game" && o.ler_placar !== false, mapping: false, selecting: true,
     reviewing: recap || o.visual_review !== false, titling: !recap, rendering: true,
   };
   return STEPS.filter(([k]) => k in seen || k === job.status || expect[k]);

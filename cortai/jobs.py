@@ -26,6 +26,7 @@ DEFAULT_OPTS = {
     "max_len": 45,
     "instructions": "",
     "content_type": "game",
+    "ler_placar": True,                # live de jogo: lê gols e partidas no placar da tela (futebol etc.)
     "style_id": styles.BUILTIN["id"],
     "visual_review": True,
     "range_start": 0,
@@ -412,7 +413,8 @@ def _game_events(job_id: str, backend: str) -> list[dict]:
     cache = d / "hud_events.json"
     if cache.exists():
         return json.loads(cache.read_text(encoding="utf-8")).get("events", [])
-    if job["options"].get("content_type") != "game" or backend == "manual":
+    opts = job["options"]
+    if opts.get("content_type") != "game" or backend == "manual" or opts.get("ler_placar") is False:
         return []
     path = Path(src["path"])
     update(job_id, status="hud", progress=0.0, message="Procurando o placar do jogo na tela…")
