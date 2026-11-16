@@ -166,11 +166,13 @@ def robust_peaks(loud: list[float], z_min: float = Z_MIN) -> list[dict]:
             peaks.append({"t": round(t, 2), "z": round(float(z[i]), 1), "db": round(float(db[i]), 1)})
     return sorted(peaks, key=lambda p: p["t"])
 
-SYMBOLS = {"susto": "😱", "grito": "🔊", "som_alto": "💥", "sem_fala_com_som": "🎮", "silencio": "🤐",
+SYMBOLS = {"risada": "😂", "susto": "😱", "grito": "🔊", "som_alto": "💥", "sem_fala_com_som": "🎮", "silencio": "🤐",
            "gol_nosso": "⚽", "gol_deles": "🥅", "inicio": "🏁", "fim_do_tempo": "⏱", "reacao": "📈", "marcador": "📌"}
 # o que cada símbolo quer dizer vai UMA vez por prompt (legend); cada evento sai curto (describe). Antes a
 # descrição inteira se repetia em cada evento: 60% do prompt de escolha de cortes era isso.
 MEANING = {
+    "risada": "risada detectada por um modelo de risada (duração = quanto tempo riram; o Whisper costuma "
+              "mostrar isso como silêncio ou inventar frase por cima)",
     "susto": "susto provável (silêncio e de repente som alto; salto = dB acima do trecho baixo)",
     "grito": "fala muito alta/grito", "som_alto": "som alto SEM fala (risada, grito ou som do jogo)",
     "sem_fala_com_som": "sem fala mas com som (risada, reação ou jogo rolando)", "silencio": "silêncio",

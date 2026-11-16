@@ -103,7 +103,7 @@ function readFields(root, names) {
 const COVER_FIELDS = ["cover_auto", "cover_style", "cover_handle", "cover_in_video"];
 const STYLE_FIELDS = ["layout", "caption_preset", "caption_position", "caption_color", "keyword_color", "title_mode",
   "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio", "voice_enhance",
-  "pos_susto", "pos_susto_segundos", "pos_susto_musica"];
+  "pos_susto", "pos_susto_segundos", "pos_susto_musica", "rosto_risada"];
 
 // ---------------------------------------------------------------- estilos
 let styleCache = [];
@@ -112,6 +112,7 @@ const RECIPE_LABELS = {
   title_mode: (v) => (v === "hook" ? "título só no começo" : ""), remove_pauses: (v) => (v ? "" : "sem cortar pausas"),
   pos_susto: (v) => ({ congelar: "pausa no susto", pb: "P&B do susto até o fim", congelar_pb: "pausa no susto em P&B" }[v] || ""),
   cover_style: (v) => `capa ${v}`,
+  risadas: (v) => (v ? "risadas detectadas e fim no auge" : ""), rosto_risada: (v) => (v ? "rosto em tela cheia nas risadas" : ""),
 };
 // estilo com receita (ex.: Terror) preenche as opções do formulário; dá para mudar depois
 function applyRecipe() {
@@ -222,7 +223,7 @@ $("#job-form").addEventListener("submit", async (e) => {
     serie: f.serie.value.trim(), serie_n: f.serie_n.value ? +f.serie_n.value : null,
     range_start: rs, range_end: re_,
     language: f.language.value, backend: f.backend.value, whisper_model: f.whisper_model.value,
-    voice_track: +f.voice_track.value, explore: f.explore.checked,
+    voice_track: +f.voice_track.value, explore: f.explore.checked, risadas: f.risadas.checked,
     ...readFields(f, STYLE_FIELDS), ...readFields(f, COVER_FIELDS),
   };
   const body = new FormData();
@@ -1202,6 +1203,8 @@ function fillClip(el, c) {
   if (c.removed > 0.2) extras.push(`−${c.removed.toFixed(1)}s de pausas`);
   if (c.manual) extras.push("manual");
   if (c.pos_susto_at != null) extras.push(`pós-susto em ${c.pos_susto_at.toFixed(0)}s`);
+  if (c.rostos_risada?.length) extras.push(`${c.rostos_risada.length}× rosto na risada`);
+  if (c.fim_original != null) extras.push("fim esticado na risada");
   $(".layout", el).textContent = c.layout ? `· ${extras.filter(Boolean).join(" · ")}` : "";
   $(".breakdown", el).innerHTML = Object.entries(c.scores || {})
     .map(([k, v]) => `<span>${SCORE_NAMES[k] || k} <b>${v}</b></span>`).join("");
@@ -1491,6 +1494,12 @@ async function openEditor(jobId, n) {
   $("#ed-pos-music").checked = !!o.pos_susto_musica;
   $("#ed-pos-secs").value = o.pos_susto_segundos ?? 1.5;
   const c0 = data.clip;
+  $("#ed-rosto").checked = !!o.rosto_risada;
+  const nr = (c0.rostos_risada || []).length;
+  $("#ed-rosto-info").textContent = nr
+    ? `Entrou ${nr}× neste clipe (em ${c0.rostos_risada.map((t) => t.toFixed(1) + " s").join(", ")})`
+    : o.rosto_risada ? "Não entrou: nenhuma risada longa no trecho, ou não achei o rosto na live."
+    : "No pico das risadas mais longas a câmera ocupa a tela toda por 1,6 s e volta. Precisa do projeto com \"Detectar risadas\".";
   $("#ed-pos-info").textContent = c0.pos_susto_at != null
     ? `Começa em ${c0.pos_susto_at.toFixed(1)} s do clipe (no susto marcado)` + (c0.pos_susto_pause ? `, pausa de ${c0.pos_susto_pause} s` : "") + (c0.pos_susto_music ? ` · música: ${c0.pos_susto_music}` : "")
     : o.pos_susto ? "Não entrou neste clipe: o susto marcado ficou perto demais do começo ou do fim."
@@ -1955,7 +1964,7 @@ $("#ed-save").onclick = async () => {
     title_mode: $("#ed-title-mode").value, title_position: $("#ed-title-pos").value, title_style: $("#ed-title-style").value,
     auto_zoom: $("#ed-zoom").checked, remove_pauses: $("#ed-pauses").checked,
     pos_susto: $("#ed-pos").value, pos_susto_segundos: +$("#ed-pos-secs").value || 1.5,
-    pos_susto_musica: $("#ed-pos-music").checked,
+    pos_susto_musica: $("#ed-pos-music").checked, rosto_risada: $("#ed-rosto").checked,
     keyword_highlight: $("#ed-keywords").checked, keyword_color: $("#ed-kwcolor").value,
     word_fixes: ed.fixes,
     word_adds: ed.adds.map(({ w, s, e }) => ({ w, s, e })),

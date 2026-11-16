@@ -169,3 +169,63 @@ def motion_peak(src: Path, start: float, end: float, src_w: int, src_h: int,
         return None
     k = int(inside[np.argmax(energy[inside])])
     return float(times[k]), float((energy[k] - med) / mad)
+
+
+# ---- borda da webcam sobreposta (para o rosto em tela cheia não pegar pedaço do jogo)
+CAM_EDGE_MIN = 10.0   # degrau de cinza (0-255) que a borda mantém em quase todos os quadros
+
+
+def cam_rect(src: Path, start: float, dur: float, src_w: int, src_h: int,
+             face: tuple[float, float, float] | None, samples: int = 16) -> tuple[float, float, float, float] | None:
+    """Retângulo da webcam em volta do rosto (x0, y0, x1, y1 normalizados), achado pelas bordas retas que ficam
+    paradas enquanto o jogo se mexe: mediana no tempo do degrau de cinza, linha inteira na altura/largura do
+    rosto. Lado sem borda achada = a webcam vai até a beirada do quadro. None sem rosto."""
+    if face is None or dur <= 0:
+        return None
+    sw = 480
+    sh = max(2, int(round(src_h * sw / src_w / 2)) * 2)
+    fps = max(0.2, min(4.0, samples / dur))
+    cmd = ["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(src),
+           "-vf", f"fps={fps:.3f},scale={sw}:{sh},format=gray", "-frames:v", str(samples), "-f", "rawvideo", "-"]
+    raw = subprocess.run(cmd, capture_output=True).stdout
+    n = len(raw) // (sw * sh)
+    if n < 3:
+        return None
+    fr = np.frombuffer(raw[: n * sw * sh], np.uint8).reshape(n, sh, sw).astype(np.int16)
+    gy = np.median(np.abs(np.diff(fr, axis=1)), axis=0)  # (sh-1, sw): bordas horizontais
+    gx = np.median(np.abs(np.diff(fr, axis=2)), axis=0)  # (sh, sw-1): bordas verticais
+    cx, cy, fw = face[0] * sw, face[1] * sh, face[2] * sw
+    xa, xb = int(max(0, cx - fw)), int(min(sw - 1, cx + fw))
+    ya, yb = int(max(0, cy - fw * 0.8)), int(min(sh - 1, cy + fw * 0.8))
+
+    sd = fr.std(axis=0)  # o jogo se mexe; o fundo da webcam fica parado
+
+    def contrast(i: int, horizontal: bool) -> bool:
+        """A borda separa um lado que se mexe (jogo) de um que quase não se mexe (fundo da câmera)."""
+        if horizontal:
+            a, b = sd[max(0, i - 4):i + 1, xa:xb + 1], sd[i + 1:i + 6, xa:xb + 1]
+        else:
+            a, b = sd[ya:yb + 1, max(0, i - 4):i + 1], sd[ya:yb + 1, i + 1:i + 6]
+        if not a.size or not b.size:
+            return False
+        ma, mb = float(a.mean()), float(b.mean())
+        return max(ma, mb) > 1.8 * min(ma, mb) + 2.0
+
+    def find(profile_fn, lo: int, hi: int, toward_lo: bool, horizontal: bool) -> int | None:
+        rng = range(hi, lo - 1, -1) if toward_lo else range(lo, hi + 1)
+        strong = [i for i in rng if profile_fn(i) >= CAM_EDGE_MIN]
+        # a 1ª linha forte saindo do rosto pode ser uma prateleira do quarto: fica a que também separa movimento
+        return next((i for i in strong if contrast(i, horizontal)), strong[0] if strong else None)
+
+    row = lambda y: float(np.median(gy[y, xa:xb + 1])) if 0 <= y < gy.shape[0] else 0.0
+    col = lambda x: float(np.median(gx[ya:yb + 1, x])) if 0 <= x < gx.shape[1] else 0.0
+    mx, my = int(fw * 0.7), int(fw * 0.3)
+    top = find(row, int(max(0, cy - fw * 4)), int(cy - fw * 0.6), True, True)
+    bot = find(row, int(cy + my), int(min(sh - 2, cy + fw * 4)), False, True)
+    left = find(col, int(max(0, cx - fw * 5)), int(cx - mx), True, False)
+    right = find(col, int(cx + mx), int(min(sw - 2, cx + fw * 5)), False, False)
+    x0 = (left + 1) / sw if left is not None else 0.0
+    x1 = (right + 1) / sw if right is not None else 1.0
+    y0 = (top + 1) / sh if top is not None else 0.0
+    y1 = (bot + 1) / sh if bot is not None else 1.0
+    return (x0, y0, x1, y1)

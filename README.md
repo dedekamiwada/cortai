@@ -59,6 +59,15 @@ Estilo de corte embutido (**Estilo de corte → Terror**), destilado de 11 corte
   - O início é a reação marcada logo depois do `peak`, ou o `peak` + 0,7 s. Os quadros da capa são tirados antes do efeito.
 - **Música no pós-susto** (opcional): uma música da pasta `musicas/pos_susto` da biblioteca entra no susto, e o som da live abaixa para 35%. Ponha ali só músicas que você tem direito de usar. Para músicas famosas, deixe desligado e adicione o som pelo app do TikTok.
 
+## Estilo Zoeira com amigos
+
+Estilo de corte embutido (**Estilo de corte → Zoeira com amigos**), destilado de 13 cortes de zoeira do TikTok (streamer em call ou jogando com os amigos):
+
+- **Guia para o Claude.** A graça é a risada, não a frase: em 6 dos 13 o pico é gargalhada sem nenhuma palavra. A estrutura mais comum é **combinado → dá errado → todo mundo ri**. O corte começa no meio da conversa (sem "e aí galera") e termina no auge, sem fechamento. O guia também traz o tipo de título de gancho ("(A RISADA DO X KKKK)").
+- **Receita**: 20 a 75 s, legenda Minimalista embaixo e sem caixa alta, título fixo no topo, sem cortar pausas (o "silêncio" da transcrição costuma ser a risada), capa no estilo Quadrinho, mais as duas opções abaixo.
+- **😂 Detectar risadas e terminar no auge** (opção do projeto, `risadas.py`): roda o detector de risada da [Zencastr](https://huggingface.co/zencastr/laughter-detection) (MIT) na live inteira. As risadas viram marcadores 😂 para o Claude, e um corte com risada forte (1,5 s ou mais) rolando no fim é esticado até ela acabar (no máximo 4 s a mais). Com "Remover pausas" ligado, a risada nunca é cortada. O modelo tem ~360 MB e baixa do Hugging Face na primeira vez, como o do Whisper. Roda na CPU (onnxruntime): numa live de 2 h leva alguns minutos. Sem internet para baixar o modelo, o projeto segue sem risadas.
+- **Rosto em tela cheia nas risadas** (por clipe no editor): no pico das risadas mais longas (até 3 por clipe, 6 s entre elas), a webcam ocupa a tela toda por 1,6 s e volta ao layout. O recorte fica dentro da borda da webcam, que é achada no vídeo: linhas retas paradas que separam o jogo, que se mexe, do fundo da câmera. Webcam baixa demais para 9:16 vira um recorte mais largo sobre ela mesma desfocada. Precisa de rosto na live e do projeto com risadas detectadas.
+
 ## Melhores momentos da partida
 
 No formulário, **Tipo de projeto → Melhores momentos da partida (1 vídeo)**. Em vez de vários cortes soltos, sai um vídeo só com os melhores lances da partida, em **duas versões**: short vertical de 60–90 s e horizontal (YouTube), cada uma com um **roteiro de narração** (.txt e .srt com o tempo de cada fala) para você gravar por cima no CapCut.

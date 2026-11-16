@@ -90,7 +90,53 @@ TÍTULO de gancho (aparece nos primeiros segundos, 7 de 11), curto, de um destes
 arma nem dá medo..", "POV: vou jogar pra relaxar um pouco"); ou promessa ("FOI CADA SUSTO AQUI").
 """,
 }
-BUILTINS = [BUILTIN, TERROR]
+
+ZOEIRA = {
+    "id": "zoeira",
+    "name": "Zoeira com amigos (risada coletiva)",
+    "builtin": True,
+    "status": "ready",
+    "summary": "Destilado de 13 cortes de zoeira com amigos: combinado que dá errado e todo mundo rindo; começa no "
+               "meio da conversa e termina no auge da risada.",
+    "sources": ["13 cortes do TikTok (alvessxclipss, viralcortes08, momentodelives, jonas_ratin, ivenshoff, "
+                "fogoqueimadooficial, ewertoonclips, dailydocoringa, cortezadagg, cortessuetam, conkyuu, balasx2k, "
+                "galanedit)"],
+    "recipe": {
+        "min_len": 20, "max_len": 75, "content_type": "game",
+        "caption_preset": "minimal", "caption_position": "bottom", "caption_upper": False,
+        "keyword_highlight": False,
+        "title_overlay": True, "title_mode": "always", "title_position": "top",
+        "auto_zoom": True, "remove_pauses": False, "pos_susto": "",
+        "risadas": True, "rosto_risada": True, "cover_style": "quadrinho",
+    },
+    "guide": """\
+Padrões de 13 cortes de zoeira com amigos (streamer em call ou jogando junto):
+
+A GRAÇA É A RISADA, NÃO A FRASE. Em 6 de 13 o pico é gargalhada sem nenhuma palavra; um deles passa 14 s só rindo.
+O marcador 😂 é risada detectada no áudio: é o candidato mais forte, mesmo quando a transcrição em volta parece
+vazia ou sem sentido (o Whisper inventa frase por cima de risada). Risada longa (3 s ou mais), ou várias seguidas,
+vale mais que uma frase engraçada sem ninguém rindo.
+
+ESTRUTURA MAIS COMUM (7 de 13): COMBINADO → DÁ ERRADO → TODO MUNDO RI. Alguém propõe um plano ou dá uma instrução
+("3, 2, 1, já", "corta o fio amarelo", "é esse o primeiro", "vai pra salinha"), alguém faz o contrário, erra ou
+entende errado, e explode a risada. Também funcionam: provocação entre amigos (acusar de mentir, zoar a jogada),
+alguém se dando mal sozinho, a reação ao que o outro fez.
+
+- COMECE NO MEIO DA CONVERSA (12 de 13 têm fala já no primeiro segundo): nada de "e aí galera", nada de contexto.
+  Comece no máximo 2 a 8 s antes do combinado ou da provocação que vai dar errado.
+- TERMINE NO AUGE: no meio da risada ou do grito, ou logo depois da última fala engraçada. Nenhum dos 13 termina
+  com explicação, despedida ou "e foi isso". Não corte a risada no começo: deixe pelo menos 1 a 2 s dela.
+- NÃO corte as pausas: o "silêncio" da transcrição costuma ser a risada.
+- Duração: 20 a 75 s, mediana 47 s. A edição é leve: o momento roda inteiro.
+
+`peak` = o segundo da explosão de risada (ou do erro que a causa). `reactions` = o rosto do streamer rindo.
+
+TÍTULO de gancho, curto, fixo no topo, em geral com "kkkk" ou anunciando a risada: "(A RISADA DO X KKKK)",
+"O MELHOR TRABALHO EM EQUIPE QUE VC VAI VER HJ", "ele confiou no amigo kkkk", "era só cortar o fio certo".
+Pode ser em minúsculas, como conversa.
+""",
+}
+BUILTINS = [BUILTIN, TERROR, ZOEIRA]
 
 
 def _dir(root: Path) -> Path:

@@ -133,6 +133,8 @@
           <label class="field"><span>Depois do susto <em>(terror)</em></span><select name="pos_susto"><option value="">Nenhum</option><option value="congelar">Pausa no susto (congela e volta)</option><option value="congelar_pb">Pausa no susto em preto e branco</option><option value="pb">Preto e branco até o fim</option></select></label>
           <label class="field"><span>Duração da pausa (s)</span><input name="pos_susto_segundos" type="number" min="0.5" max="5" step="0.5" value="1.5"></label>
           <label class="field check"><input name="pos_susto_musica" type="checkbox"><span>Música no pós-susto <em>(pasta musicas/pos_susto)</em></span></label>
+          <label class="field check"><input name="risadas" type="checkbox"><span>Detectar risadas e terminar no auge <em>(zoeira; baixa um modelo de 360 MB na 1ª vez)</em></span></label>
+          <label class="field check"><input name="rosto_risada" type="checkbox"><span>Rosto em tela cheia nas risadas <em>(zoeira)</em></span></label>
           <label class="field check"><input name="cover_auto" type="checkbox" checked><span>Capa (thumbnail) pronta em cada clipe</span></label>
           <label class="field"><span>Estilo da capa</span>
             <select name="cover_style"><option value="impacto">Impacto (Anton, contorno)</option><option value="faixa">Faixa vermelha (Bangers)</option><option value="caixa">Caixa branca (Montserrat)</option></select>
@@ -358,6 +360,7 @@
       <label class="field"><span>Depois do susto</span><select name="pos_susto"><option value="">Nenhum</option><option value="congelar">Pausa no susto (congela e volta)</option><option value="congelar_pb">Pausa no susto em preto e branco</option><option value="pb">Preto e branco até o fim</option></select></label>
           <label class="field"><span>Duração da pausa (s)</span><input name="pos_susto_segundos" type="number" min="0.5" max="5" step="0.5" value="1.5"></label>
       <label class="field check"><input name="pos_susto_musica" type="checkbox"><span>Música no pós-susto</span></label>
+      <label class="field check"><input name="rosto_risada" type="checkbox"><span>Rosto em tela cheia nas risadas</span></label>
     </div>
     </div>
     <label class="check"><input id="apply-default" type="checkbox"> Usar como padrão nos próximos projetos</label>
@@ -527,6 +530,11 @@
         <label class="ed-range">Duração da pausa <input id="ed-pos-secs" type="number" min="0.5" max="5" step="0.5" value="1.5"> s</label>
         <label class="check"><input id="ed-pos-music" type="checkbox"> Música da biblioteca a partir do susto</label>
         <p class="muted small" id="ed-pos-info"></p>
+      </div>
+      <div class="ed-section">
+        <h4>Risadas <span class="muted small">(zoeira)</span></h4>
+        <label class="check"><input id="ed-rosto" type="checkbox"> Rosto em tela cheia no pico da risada</label>
+        <p class="muted small" id="ed-rosto-info"></p>
       </div>
     </div>
     <div class="ed-timeline">
