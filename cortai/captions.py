@@ -2,6 +2,8 @@
 posição, correção de palavras e título fixo no topo."""
 from __future__ import annotations
 
+import re
+
 PRESETS = {
     "destaque": {"label": "Destaque (palavra colorida)", "font": "Arial Black", "size": 86, "outline": 7,
                  "shadow": 3, "max_words": 3, "max_chars": 18, "mode": "color", "pop": 112},
@@ -268,6 +270,28 @@ def build_ass(words: list[dict], clip_start: float, clip_end: float, opts: dict)
                 text = "{\\fad(60,0)}" + text
             lines.append(f"Dialogue: 0,{_ts(start - clip_start)},{_ts(end - clip_start)},Default,,0,0,0,,{text}\n")
     return "".join(lines)
+
+
+def shift_srt(text: str, at: float, by: float) -> str:
+    """Empurra em `by` segundos tudo que vem depois de `at` (pausa inserida no vídeo)."""
+    def stamp(sec: float) -> str:
+        ms = int(round(sec * 1000))
+        return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+
+    def parse(st: str) -> float:
+        h, m, rest = st.split(":")
+        sec, ms = rest.split(",")
+        return int(h) * 3600 + int(m) * 60 + int(sec) + int(ms) / 1000
+
+    def move(match: re.Match) -> str:
+        a, b = parse(match.group(1)), parse(match.group(2))
+        if a >= at:
+            a += by
+        if b > at:
+            b += by
+        return f"{stamp(a)} --> {stamp(b)}"
+
+    return re.sub(r"(\d\d:\d\d:\d\d,\d\d\d) --> (\d\d:\d\d:\d\d,\d\d\d)", move, text)
 
 
 def build_srt(words: list[dict], clip_start: float, clip_end: float, opts: dict) -> str:

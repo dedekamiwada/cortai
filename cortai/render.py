@@ -25,12 +25,14 @@ OUT_W, OUT_H = 1080, 1920
 SPLIT_TOP = 768  # altura do painel da webcam; o jogo fica com 1152
 ZOOM = 1.32
 ZOOM_HOLD = 1.4
-# Pós-susto (estilo terror): do susto até o fim do clipe a imagem congela no grito e/ou vira preto e branco,
-# como nos cortes de terror que viralizam. Só entra se o susto cair depois de 30% do clipe e sobrar de
-# 1,5 a 20 s depois dele (num clipe de corrida de sustos isso costuma ser o último e maior).
-POS_SUSTO = {"congelar": "Congelar no grito", "pb": "Preto e branco", "congelar_pb": "Congelar + preto e branco"}
+# Pós-susto (estilo terror).
+# - "congelar": PAUSA no susto — o quadro inteiro (sem zoom) e o som param por alguns segundos e depois o
+#   vídeo continua de onde parou. O clipe fica mais longo pela duração da pausa.
+# - "congelar_pb": a mesma pausa, com o quadro parado em preto e branco; depois volta a cor.
+# - "pb": preto e branco do susto até o fim (só se o susto cair depois de 30% do clipe e sobrarem 1,5–20 s).
+POS_SUSTO = {"congelar": "Pausa no susto", "pb": "Preto e branco até o fim", "congelar_pb": "Pausa no susto em P&B"}
 POS_MIN_FRAC, POS_MIN_AFTER, POS_MAX_AFTER = 0.3, 1.5, 20.0
-FREEZE_ZOOM = 1.18
+PAUSE_DEFAULT, PAUSE_MIN, PAUSE_MAX = 1.5, 0.5, 5.0
 LOUDNESS, TRUE_PEAK = -14, -2.0  # TikTok/Reels/Shorts; pico com folga porque o AAC sobe os picos ~1 dB
 # Voz destacada: tira o grave abafado (250 Hz), realça a presença (3,2 kHz) e o ar, comprime e segura o
 # pico do grito. Testado num corte de live: a faixa dinâmica caiu de 8 para ~5 LU sem estourar.
@@ -258,42 +260,60 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
               f"[cv]fps={1 / capa.FRAME_STEP:g},scale={capa.FRAME_W}:{capa.FRAME_H}:flags=bicubic[cq]")
     main = "pv"
 
-    # ---- pós-susto: congela o quadro do grito e/ou preto e branco, do susto até o fim
+    # ---- pós-susto (ver POS_SUSTO)
     pos = opts.get("pos_susto") or ""
+    pause = pos.startswith("congelar")
+    pause_s = min(max(float(opts.get("pos_susto_segundos") or PAUSE_DEFAULT), PAUSE_MIN), PAUSE_MAX) if pause else 0.0
     pos_at = None
     if pos in POS_SUSTO and scare_time(clip) is not None:
         t = tm.to_out(scare_time(clip) - start)
-        if t >= out_dur * POS_MIN_FRAC and POS_MIN_AFTER <= out_dur - t <= POS_MAX_AFTER:
+        if pause:
+            if 1.0 <= t <= out_dur - 0.5:
+                pos_at = t
+        elif t >= out_dur * POS_MIN_FRAC and POS_MIN_AFTER <= out_dur - t <= POS_MAX_AFTER:
             pos_at = t
-    if pos_at is not None:
-        if pos.startswith("congelar"):  # quadro do grito parado, um pouco mais perto do rosto
-            fw, fh = _even(OUT_W / FREEZE_ZOOM), _even(OUT_H / FREEZE_ZOOM)
-            fx = int(min(max(face_out[0] * OUT_W - fw / 2, 0), OUT_W - fw))
-            fy = int(min(max(face_out[1] * OUT_H - fh * 0.4, 0), OUT_H - fh))
-            chain += (f";[{main}]split=2[fa][fb];[fa]trim=end={pos_at:.3f},setpts=PTS-STARTPTS[fa1];"
-                      f"[fb]trim=start={pos_at:.3f},setpts=PTS-STARTPTS,trim=end_frame=1,"
-                      f"crop={fw}:{fh}:{fx}:{fy},scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1,"
-                      f"tpad=stop_mode=clone:stop_duration={out_dur - pos_at + 0.5:.3f}[fb1];"
-                      f"[fa1][fb1]concat=n=2:v=1:a=0[fz]")
-            main = "fz"
-        if pos.endswith("pb"):
-            on = f"enable='gte(t,{pos_at:.3f})'"
-            chain += f";[{main}]hue=s=0:{on},eq=contrast=1.15:brightness=-0.02:{on}[bw]"
-            main = "bw"
+    if pos_at is None:
+        pause_s = 0.0
+    if pos == "pb" and pos_at is not None:
+        on = f"enable='gte(t,{pos_at:.3f})'"
+        chain += f";[{main}]hue=s=0:{on},eq=contrast=1.15:brightness=-0.02:{on}[bw]"
+        main = "bw"
+    if pause_s:
+        # legenda e título entram antes, para que tudo pare junto no quadro congelado
+        gray = "hue=s=0,eq=contrast=1.15:brightness=-0.02," if pos == "congelar_pb" else ""
+        chain += (f";[{main}]null{subs}[sv];[sv]split=2[fa][fb];"
+                  f"[fa]trim=end={pos_at:.3f},setpts=PTS-STARTPTS[fa1];"
+                  f"[fb]trim=start={pos_at:.3f},setpts=PTS-STARTPTS,split=2[fb0][fb2];"
+                  f"[fb0]trim=end_frame=1,{gray}tpad=stop_mode=clone:stop_duration={pause_s:.3f},"
+                  f"trim=duration={pause_s:.3f}[fb1];"
+                  f"[fa1][fb1][fb2]concat=n=3:v=1:a=0[v]")
+        if has_audio:  # o som para junto: silêncio na pausa e depois continua
+            fmt = "aformat=sample_rates=48000:channel_layouts=stereo"
+            chain += (f";[{ain}]{fmt},asplit=2[xa][xb];[xa]atrim=end={pos_at:.3f},asetpts=PTS-STARTPTS[xa1];"
+                      f"[xb]atrim=start={pos_at:.3f},asetpts=PTS-STARTPTS[xb1];"
+                      f"anullsrc=r=48000:cl=stereo,atrim=duration={pause_s:.3f}[xs];"
+                      f"[xa1][xs][xb1]concat=n=3:v=0:a=1[apz]")
+            ain = "apz"
+    else:
+        chain += f";[{main}]null{subs}[v]"
+    total = out_dur + pause_s
     music = opts.get("_pos_music") if pos_at is not None and has_audio else None
     if music:  # trilha do pós-susto da biblioteca: entra no susto e abaixa o som da live
-        d = out_dur - pos_at
+        d = total - pos_at
         chain += (f";[{ain}]volume='if(gte(t,{pos_at:.3f}),0.35,1)':eval=frame[duck];"
                   f"[1:a]atrim=duration={d:.3f},asetpts=PTS-STARTPTS,volume=0.6,afade=t=in:d=0.2,"
                   f"afade=t=out:st={max(0.0, d - 0.8):.3f}:d=0.8,adelay=delays={int(pos_at * 1000)}:all=1[mus];"
                   f"[duck][mus]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[amx]")
         ain = "amx"
-    chain += f";[{main}]null{subs}[v]"
+    if pause_s:  # a legenda .srt também anda junto com a pausa
+        srt = out_dir / "clip.srt"
+        if srt.exists():
+            srt.write_text(captions.shift_srt(srt.read_text(encoding="utf-8"), pos_at, pause_s), encoding="utf-8")
 
     # -t antes do -i limita a LEITURA da live: sem isso a 2ª saída (quadros da capa) seguiria até o fim do vídeo
     base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(src),
             *(["-stream_loop", "-1", "-i", str(music)] if music else []),
-            "-t", f"{dur:.3f}", "-filter_complex", pre + chain, "-map", "[v]"]
+            "-t", f"{max(dur, total):.3f}", "-filter_complex", pre + chain, "-map", "[v]"]
     audio = []
     if has_audio:
         audio = ["-map", ain if ain == "0:a:0" else f"[{ain}]", "-c:a", "aac", "-b:a", "192k"]
@@ -306,13 +326,14 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
                     "-frames:v", "1", "-vf", "scale=360:-2", "thumb.jpg"], cwd=out_dir, capture_output=True)
     return {
         "layout": layout, "face_ratio": round(face_ratio, 2),
-        "out_duration": round(out_dur, 2), "removed": round(dur - out_dur, 2),
+        "out_duration": round(total, 2), "removed": round(dur - out_dur, 2),
         "zooms_applied": len(zoom_windows),
         "audio_normalized": bool(level),
         "voice_enhanced": has_audio and voice,
         "srt": "clip.srt",
         "time_map": [[round(a, 3), round(b, 3)] for a, b in tm.keep],
         "pos_susto_at": round(pos_at, 2) if pos_at is not None else None,
+        "pos_susto_pause": round(pause_s, 2) or None,
         "pos_susto_music": Path(music).name if music else None,
     }
 

@@ -58,7 +58,7 @@ TERROR = {
         "caption_preset": "minimal", "caption_position": "middle", "keyword_color": "#E61E28",
         "title_overlay": True, "title_mode": "hook", "title_position": "band",
         "auto_zoom": True, "remove_pauses": False,
-        "pos_susto": "congelar", "cover_style": "grito",
+        "pos_susto": "congelar", "pos_susto_segundos": 1.5, "cover_style": "grito",
     },
     "guide": """\
 Padrões de 11 cortes de terror de streamers com mais de 300 mil views cada:

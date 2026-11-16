@@ -54,7 +54,8 @@ DEFAULT_OPTS = {
     "mode": "clips",                   # "clips" (vários cortes) ou "highlights" (melhores momentos num vídeo)
     "saidas": "ambos",                 # resumo: "ambos", "vertical" (só o short) ou "horizontal"
     "highlight_basis": "fala_imagem",  # "fala_imagem" ou "imagem"
-    "pos_susto": "",                   # terror: "congelar", "pb" ou "congelar_pb" do susto até o fim
+    "pos_susto": "",                   # terror: "congelar" (pausa), "congelar_pb" (pausa em P&B) ou "pb" (até o fim)
+    "pos_susto_segundos": 1.5,         # duração da pausa ("congelar"): imagem e som param e depois voltam
     "pos_susto_musica": False,         # trilha da biblioteca (musicas/pos_susto) a partir do susto
     "cover_auto": True,                # capa (thumbnail) pronta para cada clipe
     "cover_style": capa.DEFAULT_STYLE,
@@ -68,7 +69,7 @@ DEFAULT_OPTS = {
 STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color", "caption_upper",
               "caption_position", "keyword_highlight", "keyword_color", "title_overlay", "title_mode",
               "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio",
-              "voice_enhance", "pos_susto", "pos_susto_musica")
+              "voice_enhance", "pos_susto", "pos_susto_segundos", "pos_susto_musica")
 CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds")
 COVER_KEYS = ("cover_auto", "cover_style", "cover_handle", "cover_in_video")  # padrões da capa
 SETTINGS_FILE = JOBS_DIR / "_settings.json"

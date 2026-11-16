@@ -52,10 +52,11 @@ Estilo de corte embutido (**Estilo de corte → Terror**), destilado de 11 corte
   - título só no começo, na faixa do meio;
   - sem cortar pausas, com o pós-susto "congelar no grito" e capa no estilo Grito.
 - **😱 Susto provável** nos sinais de áudio (`signals.py`): o volume salta 15 dB ou mais vindo de 4 s mais baixos e passa bem do nível normal da fala. Quem fala sem parar ou já tem música por baixo não tem esse salto; aí quem acha o susto é a revisão visual.
-- **Depois do susto** (opção de qualquer projeto, por clipe no editor): do susto até o fim, a imagem **congela no grito** (com um leve zoom no rosto), fica **preto e branco**, ou os dois.
-  - O início é a reação marcada logo depois do `peak`, ou o `peak` + 0,7 s.
-  - Só entra se o susto cair depois de 30% do clipe e sobrarem de 1,5 a 20 s depois dele.
-  - Os quadros da capa são tirados antes do efeito.
+- **Depois do susto** (opção de qualquer projeto, por clipe no editor):
+  - **Pausa no susto** (padrão do estilo): o vídeo inteiro, sem zoom, para junto com o som e a legenda por alguns segundos (1,5 s por padrão, de 0,5 a 5) e depois continua de onde parou. O clipe fica mais longo pela duração da pausa, e o `.srt` acompanha.
+  - **Pausa em preto e branco**: a mesma pausa com o quadro parado em P&B; depois a cor volta.
+  - **Preto e branco até o fim**: do susto até o fim do clipe. Só entra se o susto cair depois de 30% do clipe e sobrarem de 1,5 a 20 s depois dele.
+  - O início é a reação marcada logo depois do `peak`, ou o `peak` + 0,7 s. Os quadros da capa são tirados antes do efeito.
 - **Música no pós-susto** (opcional): uma música da pasta `musicas/pos_susto` da biblioteca entra no susto, e o som da live abaixa para 35%. Ponha ali só músicas que você tem direito de usar. Para músicas famosas, deixe desligado e adicione o som pelo app do TikTok.
 
 ## Melhores momentos da partida
