@@ -103,14 +103,14 @@ function readFields(root, names) {
 const COVER_FIELDS = ["cover_auto", "cover_style", "cover_handle", "cover_in_video"];
 const STYLE_FIELDS = ["layout", "caption_preset", "caption_position", "caption_color", "keyword_color", "title_mode",
   "title_position", "title_style", "captions", "caption_upper", "keyword_highlight", "title_overlay", "auto_zoom", "remove_pauses", "normalize_audio", "voice_enhance",
-  "pos_susto", "pos_susto_musica"];
+  "pos_susto", "pos_susto_segundos", "pos_susto_musica"];
 
 // ---------------------------------------------------------------- estilos
 let styleCache = [];
 const RECIPE_LABELS = {
   caption_preset: () => "legenda pequena",
   title_mode: (v) => (v === "hook" ? "título só no começo" : ""), remove_pauses: (v) => (v ? "" : "sem cortar pausas"),
-  pos_susto: (v) => ({ congelar: "congela no grito", pb: "P&B no susto", congelar_pb: "congela + P&B no susto" }[v] || ""),
+  pos_susto: (v) => ({ congelar: "pausa no susto", pb: "P&B do susto até o fim", congelar_pb: "pausa no susto em P&B" }[v] || ""),
   cover_style: (v) => `capa ${v}`,
 };
 // estilo com receita (ex.: Terror) preenche as opções do formulário; dá para mudar depois
@@ -1489,11 +1489,12 @@ async function openEditor(jobId, n) {
   $("#ed-pauses").checked = !!o.remove_pauses;
   $("#ed-pos").value = o.pos_susto || "";
   $("#ed-pos-music").checked = !!o.pos_susto_musica;
+  $("#ed-pos-secs").value = o.pos_susto_segundos ?? 1.5;
   const c0 = data.clip;
   $("#ed-pos-info").textContent = c0.pos_susto_at != null
-    ? `Começa em ${c0.pos_susto_at.toFixed(1)} s do clipe (no susto marcado)` + (c0.pos_susto_music ? ` · música: ${c0.pos_susto_music}` : "")
-    : o.pos_susto ? "Não entrou neste clipe: o susto marcado cai cedo demais ou sobra menos de 1,5 s (ou mais de 20 s) depois dele."
-    : "Do susto até o fim, a imagem congela no grito e/ou fica preto e branco. Para a música, ponha arquivos que você tem direito de usar na pasta musicas/pos_susto da biblioteca.";
+    ? `Começa em ${c0.pos_susto_at.toFixed(1)} s do clipe (no susto marcado)` + (c0.pos_susto_pause ? `, pausa de ${c0.pos_susto_pause} s` : "") + (c0.pos_susto_music ? ` · música: ${c0.pos_susto_music}` : "")
+    : o.pos_susto ? "Não entrou neste clipe: o susto marcado ficou perto demais do começo ou do fim."
+    : "Pausa: no susto o vídeo inteiro e o som param por alguns segundos e depois continuam. Preto e branco: do susto até o fim. Para a música, ponha arquivos que você tem direito de usar na pasta musicas/pos_susto da biblioteca.";
   $("#ed-keywords").checked = o.keyword_highlight !== false;
   $("#ed-kwcolor").value = o.keyword_color || "#39E75F";
   const kws = data.clip.keywords || [];
@@ -1953,7 +1954,8 @@ $("#ed-save").onclick = async () => {
     caption_upper: $("#ed-upper").checked, title_overlay: $("#ed-title-on").checked,
     title_mode: $("#ed-title-mode").value, title_position: $("#ed-title-pos").value, title_style: $("#ed-title-style").value,
     auto_zoom: $("#ed-zoom").checked, remove_pauses: $("#ed-pauses").checked,
-    pos_susto: $("#ed-pos").value, pos_susto_musica: $("#ed-pos-music").checked,
+    pos_susto: $("#ed-pos").value, pos_susto_segundos: +$("#ed-pos-secs").value || 1.5,
+    pos_susto_musica: $("#ed-pos-music").checked,
     keyword_highlight: $("#ed-keywords").checked, keyword_color: $("#ed-kwcolor").value,
     word_fixes: ed.fixes,
     word_adds: ed.adds.map(({ w, s, e }) => ({ w, s, e })),
