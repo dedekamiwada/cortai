@@ -192,8 +192,16 @@ def cam_rect(src: Path, start: float, dur: float, src_w: int, src_h: int,
     if n < 3:
         return None
     fr = np.frombuffer(raw[: n * sw * sh], np.uint8).reshape(n, sh, sw).astype(np.int16)
-    gy = np.median(np.abs(np.diff(fr, axis=1)), axis=0)  # (sh-1, sw): bordas horizontais
-    gx = np.median(np.abs(np.diff(fr, axis=2)), axis=0)  # (sh, sw-1): bordas verticais
+    # degrau entre faixas de 3 px de cada lado (borda borrada pela compressão também conta), mediana no tempo
+    k = 3
+    cs_y = np.cumsum(np.pad(fr, ((0, 0), (1, 0), (0, 0))), axis=1, dtype=np.int32)
+    band_y = (cs_y[:, k:, :] - cs_y[:, :-k, :]) / k              # média das linhas [i, i+k)
+    gy = np.zeros((sh - 1, sw), np.float32)
+    gy[k - 1:sh - k] = np.median(np.abs(band_y[:, k:] - band_y[:, :-k]), axis=0)  # borda entre i e i+1
+    cs_x = np.cumsum(np.pad(fr, ((0, 0), (0, 0), (1, 0))), axis=2, dtype=np.int32)
+    band_x = (cs_x[:, :, k:] - cs_x[:, :, :-k]) / k
+    gx = np.zeros((sh, sw - 1), np.float32)
+    gx[:, k - 1:sw - k] = np.median(np.abs(band_x[:, :, k:] - band_x[:, :, :-k]), axis=0)
     cx, cy, fw = face[0] * sw, face[1] * sh, face[2] * sw
     xa, xb = int(max(0, cx - fw)), int(min(sw - 1, cx + fw))
     ya, yb = int(max(0, cy - fw * 0.8)), int(min(sh - 1, cy + fw * 0.8))

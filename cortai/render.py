@@ -276,6 +276,7 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         rx0, ry0, rx1, ry1 = rect[0] * w, rect[1] * h, rect[2] * w, rect[3] * h
         ch = min(ry1 - ry0, fw * w * FACE_CROP_H)
         cw = min(rx1 - rx0, max(ch * OUT_W / OUT_H, fw * w * 1.5))
+        ch = min(ch, cw * OUT_H / OUT_W)  # nunca mais alto que 9:16 (passaria da tela)
         cw, ch = _even(cw), _even(ch)
         fx = int(min(max(cx * w - cw / 2, rx0), rx1 - cw))
         fy = int(min(max(cy * h - ch * 0.45, ry0), ry1 - ch))
