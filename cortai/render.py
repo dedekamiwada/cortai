@@ -25,6 +25,10 @@ OUT_W, OUT_H = 1080, 1920
 SPLIT_TOP = 768  # altura do painel da webcam; o jogo fica com 1152
 ZOOM = 1.32
 ZOOM_HOLD = 1.4
+# rosto em tela cheia (zoeira): no pico da risada a webcam ocupa o quadro todo e depois volta ao layout.
+# Recorte em volta do rosto na live, dentro da borda da webcam: até 2,9× a largura do rosto de altura.
+FACE_HOLD = 1.6
+FACE_CROP_H = 2.9
 # Pós-susto (estilo terror).
 # - "congelar": PAUSA no susto — o quadro inteiro (sem zoom) e o som param por alguns segundos e depois o
 #   vídeo continua de onde parou. O clipe fica mais longo pela duração da pausa.
@@ -134,7 +138,8 @@ def _loudnorm(src: Path, start: float, dur: float, tm: TimeMap, voice: bool = Fa
 
 
 def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[dict], opts: dict,
-                keep: list[tuple[float, float]] | None = None, zooms: list[float] | None = None) -> dict:
+                keep: list[tuple[float, float]] | None = None, zooms: list[float] | None = None,
+                faces: list[float] | None = None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = float(clip["start"]), float(clip["end"])
     dur = end - start
@@ -151,7 +156,7 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
 
     boxes: list = []
     face_ratio = 0.0
-    if layout in ("auto", "face", "split") or zooms:
+    if layout in ("auto", "face", "split") or zooms or faces:
         boxes = reframe.face_positions(src, start, dur, w, h)
         face_ratio = sum(b is not None for b in boxes) / len(boxes) if boxes else 0.0
     if layout == "auto":
@@ -188,6 +193,16 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         audio_pre += f"[{ain}]{level}[aout];"
         ain = "aout"
     pre += audio_pre
+
+    # ---- rosto em tela cheia: momentos no tempo do vídeo final (precisa de rosto na live)
+    face_windows: list[tuple[float, float]] = []
+    for f in sorted(faces or []) if face else []:
+        t = tm.to_out(f - start)
+        if 0.3 <= t < out_dur - 0.5 and all(t - b > 1.0 for _, b in face_windows):
+            face_windows.append((t, min(out_dur, t + FACE_HOLD)))
+    if face_windows:
+        pre += f"[{vin}]split=2[vlay][vface];"
+        vin = "vlay"
 
     # ---- layout → [lay], e onde o rosto fica no quadro final (para mirar o zoom)
     crop_w, crop_h = _even(h * 9 / 16), _even(h)
@@ -242,7 +257,8 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
     zoom_windows = []
     for z in sorted(zooms or []):
         t = tm.to_out(z - start)
-        if 0 <= t < out_dur - 0.3 and all(abs(t - p) > ZOOM_HOLD + 1.0 for p, _ in zoom_windows):
+        if (0 <= t < out_dur - 0.3 and all(abs(t - p) > ZOOM_HOLD + 1.0 for p, _ in zoom_windows)
+                and all(not (a - ZOOM_HOLD - 0.5 < t < b + 0.5) for a, b in face_windows)):
             zoom_windows.append((t, min(out_dur, t + ZOOM_HOLD)))
     if zoom_windows:
         zw, zh = _even(OUT_W / ZOOM), _even(OUT_H / ZOOM)
@@ -252,6 +268,26 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         chain += (f";[lay]split=2[m][z];[z]crop={zw}:{zh}:{zx}:{zy},scale={OUT_W}:{OUT_H}:flags=lanczos[zz];"
                   f"[m][zz]overlay=enable='{enable}'[lz]")
         last = "lz"
+    if face_windows:
+        # recorte dentro da webcam (a borda é achada no vídeo); webcam baixa demais para 9:16 com o rosto inteiro
+        # vira um recorte mais largo, na largura da tela, sobre ele mesmo desfocado
+        cx, cy, fw = face
+        rect = reframe.cam_rect(src, start, dur, w, h, face) or (0.0, 0.0, 1.0, 1.0)
+        rx0, ry0, rx1, ry1 = rect[0] * w, rect[1] * h, rect[2] * w, rect[3] * h
+        ch = min(ry1 - ry0, fw * w * FACE_CROP_H)
+        cw = min(rx1 - rx0, max(ch * OUT_W / OUT_H, fw * w * 1.5))
+        ch = min(ch, cw * OUT_H / OUT_W)  # nunca mais alto que 9:16 (passaria da tela)
+        cw, ch = _even(cw), _even(ch)
+        fx = int(min(max(cx * w - cw / 2, rx0), rx1 - cw))
+        fy = int(min(max(cy * h - ch * 0.45, ry0), ry1 - ch))
+        enable = "+".join(f"between(t,{a:.2f},{b:.2f})" for a, b in face_windows)
+        chain += (f";[vface]crop={cw}:{ch}:{fx}:{fy},split=2[fa0][fb0];"
+                  f"[fa0]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,crop={OUT_W}:{OUT_H},"
+                  f"gblur=sigma=25,eq=brightness=-0.1[fbg];"
+                  f"[fb0]scale={OUT_W}:-2:flags=lanczos,unsharp=5:5:0.6[ffg];"
+                  f"[fbg][ffg]overlay=(W-w)/2:(H-h)/2,setsar=1[fz];"
+                  f"[{last}][fz]overlay=enable='{enable}'[lf]")
+        last = "lf"
     # saída extra: quadros limpos (sem legenda nem título) para escolher a capa, 2 por segundo
     frames_dir = out_dir / "capa" / "quadros"
     shutil.rmtree(frames_dir, ignore_errors=True)
@@ -265,9 +301,16 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
     pause = pos.startswith("congelar")
     pause_s = min(max(float(opts.get("pos_susto_segundos") or PAUSE_DEFAULT), PAUSE_MIN), PAUSE_MAX) if pause else 0.0
     pos_at = None
-    if pos in POS_SUSTO and scare_time(clip) is not None:
-        t = tm.to_out(scare_time(clip) - start)
-        if pause:
+    # _pos_at: segundo (na live) escolhido por quem chama — marcado no editor ou o susto detectado; None = não
+    # aplica. Sem a chave (Estúdio, chamadas antigas) vale o pico do Claude, como antes.
+    manual = opts.get("_pos_manual", False)
+    at = opts["_pos_at"] if "_pos_at" in opts else scare_time(clip)
+    if pos in POS_SUSTO and at is not None:
+        t = tm.to_out(float(at) - start)
+        if manual:
+            if 0.3 <= t <= out_dur - 0.3:
+                pos_at = t
+        elif pause:
             if 1.0 <= t <= out_dur - 0.5:
                 pos_at = t
         elif t >= out_dur * POS_MIN_FRAC and POS_MIN_AFTER <= out_dur - t <= POS_MAX_AFTER:
@@ -328,11 +371,13 @@ def render_clip(src: Path, meta: dict, clip: dict, out_dir: Path, words: list[di
         "layout": layout, "face_ratio": round(face_ratio, 2),
         "out_duration": round(total, 2), "removed": round(dur - out_dur, 2),
         "zooms_applied": len(zoom_windows),
+        "rostos_risada": [round(a, 2) for a, _ in face_windows],
         "audio_normalized": bool(level),
         "voice_enhanced": has_audio and voice,
         "srt": "clip.srt",
         "time_map": [[round(a, 3), round(b, 3)] for a, b in tm.keep],
         "pos_susto_at": round(pos_at, 2) if pos_at is not None else None,
+        "pos_susto_origem": ("manual" if manual else "susto") if pos_at is not None else None,
         "pos_susto_pause": round(pause_s, 2) or None,
         "pos_susto_music": Path(music).name if music else None,
     }

@@ -56,8 +56,22 @@ Estilo de corte embutido (**Estilo de corte → Terror**), destilado de 11 corte
   - **Pausa no susto** (padrão do estilo): o vídeo inteiro, sem zoom, para junto com o som e a legenda por alguns segundos (1,5 s por padrão, de 0,5 a 5) e depois continua de onde parou. O clipe fica mais longo pela duração da pausa, e o `.srt` acompanha.
   - **Pausa em preto e branco**: a mesma pausa com o quadro parado em P&B; depois a cor volta.
   - **Preto e branco até o fim**: do susto até o fim do clipe. Só entra se o susto cair depois de 30% do clipe e sobrarem de 1,5 a 20 s depois dele.
-  - O início é a reação marcada logo depois do `peak`, ou o `peak` + 0,7 s. Os quadros da capa são tirados antes do efeito.
+  - **Só entra sozinho em clipe com susto no áudio** (😱 dentro do corte); clipe sem susto não ganha pausa nem P&B. O início é a reação marcada logo depois do susto, ou o susto + 0,7 s. Os quadros da capa são tirados antes do efeito.
+  - **Momento escolhido à mão** (editor do clipe): pare o vídeo no ponto e clique em **📍 Marcar no ponto atual**. O efeito entra ali mesmo sem susto no áudio. **Automático** volta à detecção; **Nenhum** tira o efeito do clipe. A marca aparece em vermelho na linha do tempo.
 - **Música no pós-susto** (opcional): uma música da pasta `musicas/pos_susto` da biblioteca entra no susto, e o som da live abaixa para 35%. Ponha ali só músicas que você tem direito de usar. Para músicas famosas, deixe desligado e adicione o som pelo app do TikTok.
+
+## Estilo Zoeira com amigos
+
+Estilo de corte embutido (**Estilo de corte → Zoeira com amigos**), destilado de 13 cortes de zoeira do TikTok (streamer em call ou jogando com os amigos):
+
+- **Guia para o Claude.** A graça é a risada, não a frase: em 6 dos 13 o pico é gargalhada sem nenhuma palavra. A estrutura mais comum é **combinado → dá errado → todo mundo ri**. O corte começa no meio da conversa (sem "e aí galera") e termina no auge, sem fechamento. O guia também traz o tipo de título de gancho ("(A RISADA DO X KKKK)").
+- **Receita**: 20 a 75 s, legenda Minimalista embaixo e sem caixa alta, título fixo no topo, sem cortar pausas (o "silêncio" da transcrição costuma ser a risada), capa no estilo Quadrinho, mais as duas opções abaixo.
+- **😂 Detectar risadas e terminar no auge** (opção do projeto, `risadas.py`): roda o detector de risada da [Zencastr](https://huggingface.co/zencastr/laughter-detection) (MIT) na live inteira. As risadas viram marcadores 😂 para o Claude, e um corte com risada forte (1,5 s ou mais) rolando no fim é esticado até ela acabar (no máximo 4 s a mais). Com "Remover pausas" ligado, a risada nunca é cortada. O modelo tem ~360 MB e baixa do Hugging Face na primeira vez, como o do Whisper. Roda na CPU (onnxruntime): numa live de 2 h leva alguns minutos. Sem internet para baixar o modelo, o projeto segue sem risadas.
+- **Rosto em tela cheia nas risadas** (por clipe no editor): no pico das risadas mais longas (até 3 por clipe, 6 s entre elas), a webcam ocupa a tela toda por 1,6 s e volta ao layout. O recorte fica dentro da borda da webcam, que é achada no vídeo: linhas retas paradas que separam o jogo, que se mexe, do fundo da câmera. Webcam baixa demais para 9:16 vira um recorte mais largo sobre ela mesma desfocada. Precisa de rosto na live e do projeto com risadas detectadas.
+
+## Ler o placar (opcional)
+
+Em **Live de jogo**, a opção **Ler o placar do jogo** (ligada por padrão) faz o Claude procurar o placar na tela e ler gols, começos e fins de partida. Isso é a etapa **Placar** do monitor, usada para ancorar os cortes e separar as partidas. Em jogo sem placar (terror, Minecraft, zoeira), desligue para pular a etapa. Os estilos Terror e Zoeira já desligam. O botão **🗺 Separar por partida** continua lendo o placar quando você clicar nele.
 
 ## Melhores momentos da partida
 
@@ -66,6 +80,7 @@ No formulário, **Tipo de projeto → Melhores momentos da partida (1 vídeo)**.
 - **Escolher os lances pela fala + imagem** (usa a transcrição e os picos de áudio) ou **só pela imagem** (sem transcrição: o Claude assiste à partida em folhas de frames e usa os picos do som do jogo).
 - O Claude monta a história (começo → lances → momento decisivo → resultado), dá um rótulo a cada lance ("#3 · VIRADA") e escreve as falas da narração. Os lances aparecem como clipes normais: dá para editar um e clicar em **↻ Remontar vídeos**.
 - **Separar por partida**: numa live longa (ou pelo botão **🗺 Separar por partida** de qualquer projeto), o Claude mapeia a live pelo HUD do jogo — início, fim, placar, resultado e um resumo de cada partida. Você marca as partidas que quer e clica em **Gerar vídeos das partidas marcadas**; cada uma vira um projeto, reaproveitando a transcrição da live.
+- **Sem separar**: no formulário do resumo, desmarque **Separar a live por partidas** para fazer um resumo só, da live inteira. Num projeto que já está esperando você escolher a partida, o botão **Fazer da live inteira** cria esse resumo reaproveitando a transcrição.
 - Limitação: com uma live vertical (cena vertical do OBS), a versão horizontal mostra o vídeo vertical no meio com fundo desfocado.
 
 ## Pós-edição (drama num clipe pronto)

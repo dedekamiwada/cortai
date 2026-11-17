@@ -14,7 +14,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import antigos, capa, captions, edit, frames, hud, media, paths, picker, proc, reframe, regras, render, serie as serie_mod, signals, styles, titles, to_studio, transcribe
+from . import antigos, capa, captions, edit, frames, hud, media, paths, picker, proc, reframe, regras, render, risadas, serie as serie_mod, signals, styles, titles, to_studio, transcribe
 
 JOBS_DIR = paths.JOBS_DIR
 picker.USAGE_FILE = JOBS_DIR / "_uso" / "uso.csv"  # consumo de tokens por chamada (otimização com números)
@@ -26,6 +26,7 @@ DEFAULT_OPTS = {
     "max_len": 45,
     "instructions": "",
     "content_type": "game",
+    "ler_placar": True,                # live de jogo: lê gols e partidas no placar da tela (futebol etc.)
     "style_id": styles.BUILTIN["id"],
     "visual_review": True,
     "range_start": 0,
@@ -54,9 +55,12 @@ DEFAULT_OPTS = {
     "mode": "clips",                   # "clips" (vários cortes) ou "highlights" (melhores momentos num vídeo)
     "saidas": "ambos",                 # resumo: "ambos", "vertical" (só o short) ou "horizontal"
     "highlight_basis": "fala_imagem",  # "fala_imagem" ou "imagem"
+    "separar_partidas": True,          # resumo de live longa: separa as partidas e espera você escolher uma
     "pos_susto": "",                   # terror: "congelar" (pausa), "congelar_pb" (pausa em P&B) ou "pb" (até o fim)
     "pos_susto_segundos": 1.5,         # duração da pausa ("congelar"): imagem e som param e depois voltam
     "pos_susto_musica": False,         # trilha da biblioteca (musicas/pos_susto) a partir do susto
+    "risadas": False,                  # zoeira: detecta risadas na live (marcador pro Claude) e termina o corte no auge
+    "rosto_risada": False,             # zoeira: a câmera ocupa a tela toda por ~1,5 s no pico da risada
     "cover_auto": True,                # capa (thumbnail) pronta para cada clipe
     "cover_style": capa.DEFAULT_STYLE,
     "cover_handle": "",                # ex.: @_saitox_, escrito embaixo do título da capa
@@ -69,8 +73,8 @@ DEFAULT_OPTS = {
 STYLE_KEYS = ("layout", "crop_x", "captions", "caption_preset", "caption_color", "caption_upper",
               "caption_position", "keyword_highlight", "keyword_color", "title_overlay", "title_mode",
               "title_position", "title_style", "auto_zoom", "remove_pauses", "normalize_audio",
-              "voice_enhance", "pos_susto", "pos_susto_segundos", "pos_susto_musica")
-CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds")
+              "voice_enhance", "pos_susto", "pos_susto_segundos", "pos_susto_musica", "rosto_risada")
+CLIP_OVERRIDES = (*STYLE_KEYS, "title_text", "word_fixes", "word_adds", "pos_susto_em")
 COVER_KEYS = ("cover_auto", "cover_style", "cover_handle", "cover_in_video")  # padrões da capa
 SETTINGS_FILE = JOBS_DIR / "_settings.json"
 
@@ -339,8 +343,12 @@ def _transcript_and_signals(job_id: str) -> tuple[dict, list[float]]:
     path = Path(src["path"])
     tfile, lfile = d / "transcript.json", d / "loudness.json"
     if tfile.exists() and lfile.exists():
-        return (json.loads(tfile.read_text(encoding="utf-8")),
-                json.loads(lfile.read_text(encoding="utf-8")))
+        loud = json.loads(lfile.read_text(encoding="utf-8"))
+        if _wants_laughs(opts) and not (d / LAUGH_FILE).exists():
+            audio = _ensure_audio(job_id, path, src["duration"])
+            _detect_laughs(job_id, audio, loud)
+            audio.unlink(missing_ok=True)
+        return json.loads(tfile.read_text(encoding="utf-8")), loud
     audio = _ensure_audio(job_id, path, src["duration"])
     if tfile.exists():
         transcript = json.loads(tfile.read_text(encoding="utf-8"))
@@ -358,8 +366,41 @@ def _transcript_and_signals(job_id: str) -> tuple[dict, list[float]]:
     update(job_id, message="Medindo picos de áudio…")
     loud = signals.loudness(audio)
     lfile.write_text(json.dumps(loud), encoding="utf-8")
+    if _wants_laughs(opts) and not (d / LAUGH_FILE).exists():
+        _detect_laughs(job_id, audio, loud)
     audio.unlink(missing_ok=True)
     return transcript, loud
+
+
+LAUGH_FILE = "risadas.json"
+
+
+def _wants_laughs(opts: dict) -> bool:
+    return bool(opts.get("risadas") or opts.get("rosto_risada"))
+
+
+def _detect_laughs(job_id: str, audio: Path, loud: list[float]) -> None:
+    """Roda o detector de risada na live inteira. Se falhar (sem internet para baixar o modelo, por exemplo),
+    o projeto segue sem risadas em vez de parar."""
+    dur = get(job_id)["source"]["duration"]
+    update(job_id, status="transcribing", progress=0.0, message="Procurando risadas na live…")
+    try:
+        grid = risadas.frame_probs(audio, dur, on_progress=lambda p: _throttled_progress(job_id, p),
+                                   on_status=lambda m: update(job_id, message=m))
+        found = risadas.events(grid, loud)
+        (_dir(job_id) / LAUGH_FILE).write_text(json.dumps(found), encoding="utf-8")
+        update(job_id, message=f"{len(risadas.strong(found))} risadas fortes encontradas")
+    except Exception as exc:
+        traceback.print_exc()
+        update(job_id, message=f"Detector de risada indisponível ({str(exc)[:120]}) — seguindo sem ele")
+
+
+def _laughs(job_id: str) -> list[dict]:
+    f = _dir(job_id) / LAUGH_FILE
+    try:
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
+    except (OSError, ValueError):
+        return []
 
 
 def _game_events(job_id: str, backend: str) -> list[dict]:
@@ -373,7 +414,8 @@ def _game_events(job_id: str, backend: str) -> list[dict]:
     cache = d / "hud_events.json"
     if cache.exists():
         return json.loads(cache.read_text(encoding="utf-8")).get("events", [])
-    if job["options"].get("content_type") != "game" or backend == "manual":
+    opts = job["options"]
+    if opts.get("content_type") != "game" or backend == "manual" or opts.get("ler_placar") is False:
         return []
     path = Path(src["path"])
     update(job_id, status="hud", progress=0.0, message="Procurando o placar do jogo na tela…")
@@ -398,6 +440,9 @@ def _timeline(job_id: str, backend: str, loud: list[float], words: list[dict]) -
                            "placar": e.get("placar", ""), "relogio": e.get("relogio", ""), "fim_pausa": e["fim_pausa"]})
     for pk in signals.robust_peaks(loud):
         events.append({"t": pk["t"], "kind": "reacao", "dur": 1.0, "z": pk["z"]})
+    for r in _laughs(job_id):
+        if r["dur"] >= 0.8:
+            events.append({"t": r["t"], "kind": "risada", "dur": r["dur"]})
     for m in get(job_id)["source"].get("chapters") or []:
         events.append({"t": m["t"], "kind": "marcador", "dur": 0.0, "titulo": m["titulo"]})
     events.sort(key=lambda e: e["t"])
@@ -512,9 +557,15 @@ def _map_matches(job_id: str, then_status: str = "done") -> None:
 
 
 def create_match_job(job_id: str, n: int, basis: str, serie: str | None = None) -> dict:
-    """Novo projeto de melhores momentos só com o trecho de uma partida (reaproveita transcrição e volume)."""
+    """Novo projeto de melhores momentos só com o trecho de uma partida (reaproveita transcrição e volume).
+    n = 0: a live inteira (ou o trecho escolhido), sem separar por partida."""
     job = get(job_id)
-    m = next((p for p in (job or {}).get("partidas") or [] if p["n"] == n), None)
+    if job and n == 0:
+        o = job["options"]
+        m = {"n": 0, "inicio": float(o.get("range_start") or 0),
+             "fim": float(o.get("range_end") or 0) or job["source"]["duration"], "placar": ""}
+    else:
+        m = next((p for p in (job or {}).get("partidas") or [] if p["n"] == n), None)
     if not m:
         raise ValueError("partida não encontrada")
     d = _dir(job_id)
@@ -528,9 +579,11 @@ def create_match_job(job_id: str, n: int, basis: str, serie: str | None = None) 
         seed["hud_events.json"] = d / "hud_events.json"  # o placar da live inteira já foi lido
     opts = {**job["options"], "mode": "highlights", "range_start": m["inicio"], "range_end": m["fim"],
             "highlight_basis": basis if basis in ("fala_imagem", "imagem") else "fala_imagem",
-            "serie": defaults().get("serie", "") if serie is None else serie, "serie_n": None}
+            "serie": defaults().get("serie", "") if serie is None else serie, "serie_n": None,
+            "separar_partidas": False}
     base = Path(job["name"]).stem if "." in job["name"] else job["name"]
-    name = f"{base} — partida {n}" + (f" ({m['placar']})" if m["placar"] else "")
+    name = (f"{base} — live inteira" if n == 0 else
+            f"{base} — partida {n}" + (f" ({m['placar']})" if m["placar"] else ""))
     return create(name, opts, local_path=job["source"]["path"], seed_files=seed)
 
 
@@ -549,7 +602,8 @@ def _run_highlights(job_id: str) -> None:
     update(job_id, backend=backend)
     if backend == "manual":
         raise RuntimeError("melhores momentos precisa do Claude Code logado ou de ANTHROPIC_API_KEY")
-    if not opts.get("range_start") and not opts.get("range_end") and src["duration"] > MATCH_SPLIT_MIN:
+    if (opts.get("separar_partidas", True) and not opts.get("range_start") and not opts.get("range_end")
+            and src["duration"] > MATCH_SPLIT_MIN):
         # live longa: primeiro separa as partidas e deixa o usuário escolher qual vira vídeo
         _map_matches(job_id, then_status="waiting_match")
         return
@@ -607,7 +661,8 @@ def _run_highlights(job_id: str) -> None:
         if transcript["segments"]:
             return picker.format_transcript(transcript, events, a, b, legend=False)
         return "\n".join(signals.describe(e) for e in events
-                         if a <= e["t"] <= b and (e["kind"] in signals.LOUD_KINDS or e["kind"] in GAME_KINDS))
+                         if a <= e["t"] <= b and (e["kind"] in signals.LOUD_KINDS or e["kind"] in GAME_KINDS
+                                                   or e["kind"] == "risada"))
 
     update(job_id, progress=0.0, message=f"Claude assistindo aos {len(candidates)} lances e escrevendo o roteiro…")
     serie = (opts.get("serie") or "").strip()
@@ -1184,6 +1239,12 @@ def _accept_plan(job_id: str, raw: dict) -> None:
     clips = picker.snap_clips(picker.parse_plan(raw), words, src["duration"], opts["min_len"], opts["max_len"],
                               anchors=anchors)
     snapped = clips
+    if opts.get("risadas"):
+        laughs = _laughs(job_id)
+        for c in clips:
+            new_end = risadas.end_on_laugh(c["start"], c["end"], laughs, src["duration"], opts["max_len"])
+            if new_end:
+                c["fim_original"], c["end"] = c["end"], new_end
     clips = _diversify(clips, int(opts["num_clips"]), _match_starts(job_id))
     if not clips:
         raise RuntimeError("nenhum candidato passou na revisão — tente outras instruções ou desligue a revisão visual")
@@ -1432,8 +1493,35 @@ def _edit_plan(job_id: str, clip: dict, opts: dict, words: list[dict]) -> tuple[
         protect = [(z - 0.5, z + 2.5) for z in zooms]  # nunca corta dentro da reação
         if clip.get("peak"):
             protect.append((clip["peak"] - 1.5, clip["peak"] + 4.0))  # a pausa antes do lance é a tensão: fica
+        protect += [(r["t"], r["t"] + r["dur"]) for r in risadas.inside(_laughs(job_id), start, end)]  # risada não é pausa
         keep = edit.keep_intervals(words, loud, signals.talk_level(loud, words), start, end, protect)
     return keep, zooms
+
+
+SCARE_NEAR_PEAK = 3.0  # s: o susto detectado no áudio precisa estar perto do pico que o Claude marcou
+
+
+def _scare_at(job_id: str, clip: dict, opts: dict, words: list[dict]) -> tuple[float | None, bool]:
+    """Onde entra o pós-susto (segundo na live) e se foi marcado à mão.
+
+    Marcado no editor (`pos_susto_em`) vale sempre. Senão, só entra se o áudio tiver um susto de verdade (😱:
+    silêncio e de repente som alto) dentro do corte: clipe sem susto não ganha pausa nem P&B."""
+    manual = opts.get("pos_susto_em")
+    if manual is not None:
+        return float(manual), True
+    loud_file = _dir(job_id) / "loudness.json"
+    if not loud_file.exists():
+        return None, False
+    loud = json.loads(loud_file.read_text(encoding="utf-8"))
+    scares = [e["t"] for e in signals.audio_events(loud, words)
+              if e["kind"] == "susto" and clip["start"] <= e["t"] <= clip["end"]]
+    if not scares:
+        return None, False
+    peak = clip.get("peak")
+    near = [t for t in scares if peak is not None and abs(t - float(peak)) <= SCARE_NEAR_PEAK]
+    if near:
+        return render.scare_time({**clip, "peak": min(near, key=lambda t: abs(t - float(peak)))}), False
+    return render.scare_time({**clip, "peak": max(scares)}), False  # o Claude marcou outro pico: usa o susto do áudio
 
 
 def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
@@ -1449,13 +1537,17 @@ def _render_one(job_id: str, idx: int, words: list[dict]) -> None:
     opts = {**job["options"], **clip.get("overrides", {})}
     opts.setdefault("title_text", clip["title"])
     opts["keywords"] = clip.get("keywords") or []
-    if opts.get("pos_susto") and opts.get("pos_susto_musica"):
-        opts["_pos_music"] = pos_susto_music(clip["n"])
+    if opts.get("pos_susto"):
+        opts["_pos_at"], opts["_pos_manual"] = _scare_at(job_id, clip, opts, words)
+        if opts.get("pos_susto_musica"):
+            opts["_pos_music"] = pos_susto_music(clip["n"])
     try:
         # legenda manual conta como fala: o corte de pausas não apaga o trecho dela
         keep, zooms = _edit_plan(job_id, clip, opts, captions.with_adds(words, opts.get("word_adds")))
+        faces = (risadas.face_shots(clip["start"], clip["end"], _laughs(job_id))
+                 if opts.get("rosto_risada") else [])
         info = render.render_clip(Path(job["source"]["path"]), job["source"], clip, out_dir, words, opts,
-                                  keep=keep, zooms=zooms)
+                                  keep=keep, zooms=zooms, faces=faces)
         _set_clip(job_id, idx, file=f"{job_id}/clips/{clip['n']:02d}/clip.mp4",
                   thumb=f"{job_id}/clips/{clip['n']:02d}/thumb.jpg", cover_origin="render", formato="vertical", **info)
         if opts.get("cover_auto", True) or clip.get("cover"):
@@ -1707,6 +1799,11 @@ def rerender(job_id: str, n: int, changes: dict) -> None:
         raise ValueError("word_fixes precisa ser um objeto {segundo: texto}")
     if "word_adds" in overrides:
         overrides["word_adds"] = _clean_adds(overrides["word_adds"])
+    if overrides.get("pos_susto_em") is not None:
+        try:
+            overrides["pos_susto_em"] = round(float(overrides["pos_susto_em"]), 2)
+        except (TypeError, ValueError):
+            raise ValueError("pos_susto_em precisa ser um número (segundo do vídeo)") from None
     recap = _is_recap(job)
     fields = {"start": round(start, 2), "end": round(end, 2), "overrides": overrides,
               "status": clip["status"] if recap else "pending"}
