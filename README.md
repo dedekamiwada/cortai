@@ -80,6 +80,7 @@ No formulário, **Tipo de projeto → Melhores momentos da partida (1 vídeo)**.
 - **Escolher os lances pela fala + imagem** (usa a transcrição e os picos de áudio) ou **só pela imagem** (sem transcrição: o Claude assiste à partida em folhas de frames e usa os picos do som do jogo).
 - O Claude monta a história (começo → lances → momento decisivo → resultado), dá um rótulo a cada lance ("#3 · VIRADA") e escreve as falas da narração. Os lances aparecem como clipes normais: dá para editar um e clicar em **↻ Remontar vídeos**.
 - **Separar por partida**: numa live longa (ou pelo botão **🗺 Separar por partida** de qualquer projeto), o Claude mapeia a live pelo HUD do jogo — início, fim, placar, resultado e um resumo de cada partida. Você marca as partidas que quer e clica em **Gerar vídeos das partidas marcadas**; cada uma vira um projeto, reaproveitando a transcrição da live.
+- **Sem separar**: no formulário do resumo, desmarque **Separar a live por partidas** para fazer um resumo só, da live inteira. Num projeto que já está esperando você escolher a partida, o botão **Fazer da live inteira** cria esse resumo reaproveitando a transcrição.
 - Limitação: com uma live vertical (cena vertical do OBS), a versão horizontal mostra o vídeo vertical no meio com fundo desfocado.
 
 ## Pós-edição (drama num clipe pronto)

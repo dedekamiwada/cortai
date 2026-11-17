@@ -55,6 +55,7 @@ DEFAULT_OPTS = {
     "mode": "clips",                   # "clips" (vários cortes) ou "highlights" (melhores momentos num vídeo)
     "saidas": "ambos",                 # resumo: "ambos", "vertical" (só o short) ou "horizontal"
     "highlight_basis": "fala_imagem",  # "fala_imagem" ou "imagem"
+    "separar_partidas": True,          # resumo de live longa: separa as partidas e espera você escolher uma
     "pos_susto": "",                   # terror: "congelar" (pausa), "congelar_pb" (pausa em P&B) ou "pb" (até o fim)
     "pos_susto_segundos": 1.5,         # duração da pausa ("congelar"): imagem e som param e depois voltam
     "pos_susto_musica": False,         # trilha da biblioteca (musicas/pos_susto) a partir do susto
@@ -556,9 +557,15 @@ def _map_matches(job_id: str, then_status: str = "done") -> None:
 
 
 def create_match_job(job_id: str, n: int, basis: str, serie: str | None = None) -> dict:
-    """Novo projeto de melhores momentos só com o trecho de uma partida (reaproveita transcrição e volume)."""
+    """Novo projeto de melhores momentos só com o trecho de uma partida (reaproveita transcrição e volume).
+    n = 0: a live inteira (ou o trecho escolhido), sem separar por partida."""
     job = get(job_id)
-    m = next((p for p in (job or {}).get("partidas") or [] if p["n"] == n), None)
+    if job and n == 0:
+        o = job["options"]
+        m = {"n": 0, "inicio": float(o.get("range_start") or 0),
+             "fim": float(o.get("range_end") or 0) or job["source"]["duration"], "placar": ""}
+    else:
+        m = next((p for p in (job or {}).get("partidas") or [] if p["n"] == n), None)
     if not m:
         raise ValueError("partida não encontrada")
     d = _dir(job_id)
@@ -572,9 +579,11 @@ def create_match_job(job_id: str, n: int, basis: str, serie: str | None = None) 
         seed["hud_events.json"] = d / "hud_events.json"  # o placar da live inteira já foi lido
     opts = {**job["options"], "mode": "highlights", "range_start": m["inicio"], "range_end": m["fim"],
             "highlight_basis": basis if basis in ("fala_imagem", "imagem") else "fala_imagem",
-            "serie": defaults().get("serie", "") if serie is None else serie, "serie_n": None}
+            "serie": defaults().get("serie", "") if serie is None else serie, "serie_n": None,
+            "separar_partidas": False}
     base = Path(job["name"]).stem if "." in job["name"] else job["name"]
-    name = f"{base} — partida {n}" + (f" ({m['placar']})" if m["placar"] else "")
+    name = (f"{base} — live inteira" if n == 0 else
+            f"{base} — partida {n}" + (f" ({m['placar']})" if m["placar"] else ""))
     return create(name, opts, local_path=job["source"]["path"], seed_files=seed)
 
 
@@ -593,7 +602,8 @@ def _run_highlights(job_id: str) -> None:
     update(job_id, backend=backend)
     if backend == "manual":
         raise RuntimeError("melhores momentos precisa do Claude Code logado ou de ANTHROPIC_API_KEY")
-    if not opts.get("range_start") and not opts.get("range_end") and src["duration"] > MATCH_SPLIT_MIN:
+    if (opts.get("separar_partidas", True) and not opts.get("range_start") and not opts.get("range_end")
+            and src["duration"] > MATCH_SPLIT_MIN):
         # live longa: primeiro separa as partidas e deixa o usuário escolher qual vira vídeo
         _map_matches(job_id, then_status="waiting_match")
         return

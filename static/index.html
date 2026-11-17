@@ -57,6 +57,7 @@
         <label class="field hl-only hidden"><span>Gerar</span>
           <select name="saidas"><option value="ambos">Vertical e horizontal</option><option value="vertical">Só o short vertical</option><option value="horizontal">Só o horizontal</option></select>
         </label>
+        <label class="field check hl-only hidden"><input name="separar_partidas" type="checkbox" checked><span>Separar a live por partidas <em>(live longa: você escolhe qual partida vira vídeo; desmarque para fazer da live inteira)</em></span></label>
         <label class="field hl-only hidden"><span>Escolher os lances pela</span>
           <select name="highlight_basis">
             <option value="fala_imagem">Fala + imagem</option>
@@ -213,6 +214,7 @@
     <div class="pos-actions">
       <button class="primary" id="match-go" disabled>Gerar vídeos das partidas marcadas</button>
       <span class="muted small" id="match-count"></span>
+      <button class="ghost" id="match-whole" title="Um resumo só, da live inteira, sem separar por partida">Fazer da live inteira</button>
     </div>
     <div id="match-made" class="muted small"></div>
   </section>

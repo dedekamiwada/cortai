@@ -223,6 +223,7 @@ $("#job-form").addEventListener("submit", async (e) => {
     ler_placar: f.ler_placar.checked,
     visual_review: f.visual_review.checked, layout: f.layout.value,
     mode: f.mode.value, highlight_basis: f.highlight_basis.value, saidas: f.saidas.value,
+    separar_partidas: f.separar_partidas.checked,
     serie: f.serie.value.trim(), serie_n: f.serie_n.value ? +f.serie_n.value : null,
     range_start: rs, range_end: re_,
     language: f.language.value, backend: f.backend.value, whisper_model: f.whisper_model.value,
@@ -746,6 +747,15 @@ $("#match-go").onclick = async (e) => {
   $$("#match-rows input:checked").forEach((b) => (b.checked = false));
   updateMatchCount();
   $("#match-made").innerHTML = `Projetos criados (rodam um por vez, na fila): ${made.join(" · ")}`;
+};
+$("#match-whole").onclick = async (e) => {
+  e.target.disabled = true;
+  try {
+    const r = await postJSON(`/api/jobs/${currentJob.id}/partidas/0`,
+      { basis: $("#match-basis").value, serie: $("#match-serie").value.trim() });
+    $("#match-made").innerHTML = `Projeto criado (reaproveita a transcrição): <a href="#/job/${r.id}">live inteira</a>`;
+  } catch (ex) { $("#match-made").textContent = `Não deu: ${ex.message}`; }
+  e.target.disabled = false;
 };
 $("#map-btn").onclick = async () => {
   if (!confirm("O Claude vai assistir à live inteira (folhas de frames) para separar as partidas. Continuar?")) return;
